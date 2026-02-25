@@ -70,7 +70,7 @@ jobs:
 
           # Clone repositories using the branch names
           git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
-          git clone https://github.com/TheWildJames/kernel_patches.git
+          git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
           #git clone https://github.com/kerneltoast/${{ inputs.repo }}
           git clone https://github.com/kerneltoast/android_kernel_google_tensynos
           if [ "${{ matrix.variant }}" != "WKSU" ]; then
@@ -104,6 +104,8 @@ jobs:
 
           # Change to common directory and apply SUSFS patch
           patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          echo "Applying sys.c_fix.patch from bhazheng repo..."
+          cp ../kernel_patches_new/sys.c_fix.patch ./
           patch -p1 < sys.c_fix.patch
 
       - name: Configure KernelSU
