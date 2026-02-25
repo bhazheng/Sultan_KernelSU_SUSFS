@@ -16,31 +16,11 @@ jobs:
       repo: "android_kernel_google_gs201"
       android_version: "android14"
       kernel_version: "6.1"
-      
-  build-kernel-zuma:
-    uses: ./.github/workflows/sultan.yml
-    secrets: inherit
-    with:
-      codename: "zuma"
-      repo: "android_kernel_google_zuma"
-      android_version: "android14"
-      kernel_version: "6.1"
-
-  build-kernel-zumapro:
-    uses: ./.github/workflows/sultan.yml
-    secrets: inherit
-    with:
-      codename: "zumapro"
-      repo: "android_kernel_google_zumapro"
-      android_version: "android14"
-      kernel_version: "6.1"
 
   trigger-release:
     runs-on: ubuntu-latest
     needs:
         - build-kernel-gs201
-        - build-kernel-zuma
-        - build-kernel-zumapro
     env:
       REPO_OWNER: TheWildJames
       REPO_NAME: Sultan_KernelSU_SUSFS
