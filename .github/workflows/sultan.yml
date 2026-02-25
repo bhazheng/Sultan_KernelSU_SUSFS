@@ -197,6 +197,34 @@ jobs:
           make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
           make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all)
 
+      - name: Apply KPM Support Patch (Xiaomi Dev Method)
+        run: |
+          # The binary patcher requires KSU to be enabled via environment variable check
+          # We check the defconfig to confirm KSU is intended to be active
+          cd "$CONFIG"
+          if grep -q "CONFIG_KSU=y" ./arch/arm64/configs/${{ inputs.codename }}_defconfig; then
+              echo "Applying KPM support patch..."
+              # Navigate to the boot directory where the built Image resides
+              # Standard kernel build output is usually in the root or 'out' folder
+              # Adjusting path to match typical GKI build structures
+              cd arch/arm64/boot/
+              wget https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.13.0/patch_linux
+              chmod +x patch_linux
+              ./patch_linux 
+              
+              # The patcher creates 'oImage' as the patched output
+              if [ -f "oImage" ]; then
+                  rm Image
+                  mv oImage Image
+                  echo "KPM Patch applied successfully."
+              else
+                  echo "KPM Patching failed: oImage not found."
+                  exit 1
+              fi
+          else
+              echo "KSU not enabled in config, skipping KPM patch."
+          fi
+
       - name: Copy Images
         run: |
           echo "Changing to configuration directory: $CONFIG..."
