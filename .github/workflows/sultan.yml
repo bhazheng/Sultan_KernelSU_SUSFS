@@ -198,31 +198,31 @@ jobs:
 
       - name: Apply KPM Support Patch (Xiaomi Dev Method)
         run: |
-          cd "$CONFIG"
-          # Masuk ke folder output tempat Image berada
-          cd out/arch/arm64/boot/
+          cd "$CONFIG/out/arch/arm64/boot/"
           
           if [ ! -f "Image" ]; then
-              echo "Error: File Image tidak ditemukan di $(pwd)"
+              echo "Error: Biner Image mentah tidak ditemukan!"
               exit 1
           fi
 
-          echo "Applying KPM support patch..."
+          echo "Downloading Patcher..."
           wget https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.13.0/patch_linux
           chmod +x patch_linux
+          
+          echo "Executing Patcher on raw Image..."
           ./patch_linux 
           
           if [ -f "oImage" ]; then
               rm Image
               mv oImage Image
-              echo "KPM Patch berhasil diterapkan pada oImage."
+              echo "Patching biner sukses."
               
-              # Opsional: Jika Anda membutuhkan Image.lz4 yang juga terupdate, 
-              # Anda mungkin perlu mengompres ulang atau menghapusnya agar Image baru yang diambil.
+              # Kompresi ulang ke Image.lz4 agar bootloader bisa membaca kernel yang sudah dipatch
+              echo "Re-compressing to LZ4..."
               rm -f Image.lz4
               lz4 -9 Image Image.lz4
           else
-              echo "Patching gagal: oImage tidak tercipta"
+              echo "Patching gagal: oImage tidak dibuat oleh patcher."
               exit 1
           fi
 
