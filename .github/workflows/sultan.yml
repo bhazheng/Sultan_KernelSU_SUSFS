@@ -196,36 +196,6 @@ jobs:
           make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
           make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all)
 
-      - name: Apply KPM Support Patch (Xiaomi Dev Method)
-        run: |
-          cd "$CONFIG/out/arch/arm64/boot/"
-          
-          if [ ! -f "Image" ]; then
-              echo "Error: Biner Image mentah tidak ditemukan!"
-              exit 1
-          fi
-
-          echo "Downloading Patcher..."
-          wget https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.13.0/patch_linux
-          chmod +x patch_linux
-          
-          echo "Executing Patcher on raw Image..."
-          ./patch_linux 
-          
-          if [ -f "oImage" ]; then
-              rm Image
-              mv oImage Image
-              echo "Patching biner sukses."
-              
-              # Kompresi ulang ke Image.lz4 agar bootloader bisa membaca kernel yang sudah dipatch
-              echo "Re-compressing to LZ4..."
-              rm -f Image.lz4
-              lz4 -9 Image Image.lz4
-          else
-              echo "Patching gagal: oImage tidak dibuat oleh patcher."
-              exit 1
-          fi
-
       - name: Copy Images
         run: |
           echo "Changing to configuration directory: $CONFIG..."
@@ -241,7 +211,20 @@ jobs:
           elif [ "${{ inputs.codename }}" == "zumapro" ]; then
             cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
           fi
-
+          
+      - name: Apply KPM Patch
+        run: |
+          echo "Navigating to AnyKernel3 directory..."
+          cd ./AnyKernel3
+          curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch
+          chmod 777 patch
+          img_file="Image.lz4"
+          lz4 -d "$img_file" Image
+          ./patch && mv oImage Image
+          lz4 -f Image Image.lz4
+          rm Image
+          rm patch
+         
       - name: Create ZIP Files for Different Formats
         run: |
           echo "Navigating to AnyKernel3 directory..."
