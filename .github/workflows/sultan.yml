@@ -40,15 +40,15 @@ jobs:
       #    remove-cached-tools: 'false'   # Avoid unless confirmed safe
       #    verbose: 'true'                # Enable detailed logging
 
-      - name: Download and extract GCC 14.2.0 toolchain
+      - name: Download and extract GCC 15.2.0 toolchain
         run: |
-          echo "Downloading GCC 14.2.0 cross-compiler toolchain..."
-          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
+          echo "Downloading GCC 15.2.0 cross-compiler toolchain..."
+          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/15.2.0/x86_64-gcc-15.2.0-nolibc-aarch64-linux.tar.gz
           echo "Extracting .gz file..."
-          gunzip x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
+          gunzip x86_64-gcc-15.2.0-nolibc-aarch64-linux.tar.gz
           echo "Extracting .tar file..."
-          tar -xf x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar
-          echo "GCC 14.2.0 toolchain extracted successfully"
+          tar -xf x86_64-gcc-15.2.0-nolibc-aarch64-linux.tar
+          echo "GCC 15.2.0 toolchain extracted successfully"
 
       - name: Set CONFIG Environment Variable
         run: |
@@ -72,7 +72,7 @@ jobs:
           git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
           #git clone https://github.com/kerneltoast/${{ inputs.repo }}
-          git clone https://github.com/kerneltoast/android_kernel_google_tensynos
+          git clone https://github.com/bhazheng/android_kernel_google_tensynos
           SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           echo "Using branch for SUSFS: $SUSFS_BRANCH"
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
@@ -124,7 +124,6 @@ jobs:
           echo "CONFIG_THREAD_INFO_IN_TASK=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_KALLSYMS_ALL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_KALLSYMS=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KPM=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
 
       - name: Configure Mountify Support
         run: |
@@ -193,8 +192,8 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all)
+          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-15.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-15.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-15.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all)
 
       - name: Copy Images
         run: |
@@ -211,19 +210,6 @@ jobs:
           elif [ "${{ inputs.codename }}" == "zumapro" ]; then
             cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
           fi
-          
-      - name: Apply KPM Patch
-        run: |
-          echo "Navigating to AnyKernel3 directory..."
-          cd ./AnyKernel3
-          curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch
-          chmod 777 patch
-          img_file="Image.lz4"
-          lz4 -d "$img_file" Image
-          ./patch && mv oImage Image
-          lz4 -f Image Image.lz4
-          rm Image
-          rm patch
          
       - name: Create ZIP Files for Different Formats
         run: |
