@@ -40,15 +40,15 @@ jobs:
       #    remove-cached-tools: 'false'   # Avoid unless confirmed safe
       #    verbose: 'true'                # Enable detailed logging
 
-      - name: Download and extract GCC 15.2.0 toolchain
+      - name: Download and extract GCC 15.1.0 toolchain
         run: |
-          echo "Downloading GCC 15.2.0 cross-compiler toolchain..."
-          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/15.2.0/x86_64-gcc-15.2.0-nolibc-aarch64-linux.tar.gz
+          echo "Downloading GCC 15.1.0 cross-compiler toolchain..."
+          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/15.1.0/x86_64-gcc-15.1.0-nolibc-aarch64-linux.tar.gz
           echo "Extracting .gz file..."
-          gunzip x86_64-gcc-15.2.0-nolibc-aarch64-linux.tar.gz
+          gunzip x86_64-gcc-15.1.0-nolibc-aarch64-linux.tar.gz
           echo "Extracting .tar file..."
-          tar -xf x86_64-gcc-15.2.0-nolibc-aarch64-linux.tar
-          echo "GCC 15.2.0 toolchain extracted successfully"
+          tar -xf x86_64-gcc-15.1.0-nolibc-aarch64-linux.tar
+          echo "GCC 15.1.0 toolchain extracted successfully"
 
       - name: Set CONFIG Environment Variable
         run: |
@@ -190,8 +190,8 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-15.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-15.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-15.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-15.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all)
+          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-15.1.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-15.1.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-15.1.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-15.1.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all)
 
       - name: Copy Images
         run: |
