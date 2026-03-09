@@ -25,9 +25,9 @@ jobs:
       REPO_OWNER: TheWildJames
       REPO_NAME: Sultan_KernelSU_SUSFS
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_NAME: "Sultan Kernels With KernelSU Next & SUSFS v2.0.0"
+      RELEASE_NAME: "Sultan Kernels With Resukisu & SUSFS v2.0.0"
       RELEASE_NOTES: |
-        This release contains KernelSU Next and SUSFS v2.0.0
+        This release contains Resukisu and SUSFS v2.0.0
         
         ⚠️ **COMPATIBILITY NOTICE** ⚠️
         Please ensure compatibility!
@@ -36,11 +36,12 @@ jobs:
         -> https://github.com/sidex15/ksu_module_susfs
         
         Managers:
-        -> https://github.com/WildKernels/Wild_KSU
+        -> https://github.com/ReSukiSU/ReSukiSU
         
         Features:
-        [+] Wild KSU
+        [+] Resukisu
         [+] SUSFS v2.0.0
+        [+] BBRV3
 
     steps:
       # Checkout the code
