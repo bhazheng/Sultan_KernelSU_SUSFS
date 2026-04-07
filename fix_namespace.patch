@@ -11,6 +11,7 @@
 +
  #include "pnode.h"
  #include "internal.h"
+ #include <trace/hooks/blk.h>
 
 +
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
