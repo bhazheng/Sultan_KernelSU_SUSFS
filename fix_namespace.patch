@@ -1,5 +1,5 @@
---- a/fs/namespace.c	2026-03-10 15:31:40.244000129 +0300
-+++ b/fs/namespace.c	2026-03-10 15:33:18.208000135 +0300
+--- a/fs/namespace.c
++++ b/fs/namespace.c
 @@ -32,10 +32,24 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
