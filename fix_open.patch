@@ -1,5 +1,5 @@
---- fs/open.c
-+++ fs/open.c
+--- a/fs/open.c	2026-03-10 15:31:40.244000129 +0300
++++ b/fs/open.c	2026-03-10 15:33:18.208000135 +0300
 @@ -1368,8 +1399,28 @@ static long do_sys_openat2(int dfd, const char __user *filename,
  		return PTR_ERR(tmp);
  
