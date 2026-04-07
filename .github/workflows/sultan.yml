@@ -104,9 +104,9 @@ jobs:
           # echo "Applying sys.c_fix.patch from bhazheng repo..."
           # cp ../kernel_patches_new/sys.c_fix.patch ./
           # patch -p1 < sys.c_fix.patch
-          echo "Applying fix_namespace.patch from bhazheng repo..."
-          cp ../kernel_patches_new/fix_namespace.patch ./
-          patch -p1 < fix_namespace.patch
+          # echo "Applying fix_namespace.patch from bhazheng repo..."
+          # cp ../kernel_patches_new/fix_namespace.patch ./
+          # patch -p1 < fix_namespace.patch
           # echo "Applying fix_open.patch from bhazheng repo..."
           # cp ../kernel_patches_new/fix_open.patch ./
           # patch -p1 < fix_open.patch
