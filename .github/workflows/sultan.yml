@@ -73,7 +73,7 @@ jobs:
           git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
           #git clone https://github.com/kerneltoast/${{ inputs.repo }}
           git clone https://github.com/bhazheng/android_kernel_google_tensynos
-          SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
+          SUSFS_BRANCH="sultan-shiba-susfs-minimal"
           echo "Using branch for SUSFS: $SUSFS_BRANCH"
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
 
@@ -104,12 +104,12 @@ jobs:
           echo "Applying sys.c_fix.patch from bhazheng repo..."
           cp ../kernel_patches_new/sys.c_fix.patch ./
           patch -p1 < sys.c_fix.patch
-          echo "Applying fix_namespace.patch from bhazheng repo..."
-          cp ../kernel_patches_new/fix_namespace.patch ./
-          patch -p1 < fix_namespace.patch
-          echo "Applying fix_open.patch from bhazheng repo..."
-          cp ../kernel_patches_new/fix_open.patch ./
-          patch -p1 < fix_open.patch
+          # echo "Applying fix_namespace.patch from bhazheng repo..."
+          # cp ../kernel_patches_new/fix_namespace.patch ./
+          # patch -p1 < fix_namespace.patch
+          # echo "Applying fix_open.patch from bhazheng repo..."
+          # cp ../kernel_patches_new/fix_open.patch ./
+          # patch -p1 < fix_open.patch
 
       - name: Configure KernelSU
         run: |
