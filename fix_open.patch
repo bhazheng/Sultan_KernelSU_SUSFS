@@ -27,5 +27,6 @@
 +#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 +
  		if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {
- 			put_unused_fd(fd);
- 			fd = PTR_ERR(f);
+	 		put_unused_fd(fd);
+		 	fd = PTR_ERR(f);
+ 
