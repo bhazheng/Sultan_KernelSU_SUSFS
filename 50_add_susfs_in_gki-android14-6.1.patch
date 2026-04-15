@@ -1,4 +1,3 @@
-
 diff --git a/drivers/input/input.c b/drivers/input/input.c
 index 78be582b5..bdca57a9e 100644
 --- a/drivers/input/input.c
@@ -404,6 +403,14 @@ index 1fa36df7b..104fdadfc 100644
  
  	nd->flags |= op->intent;
  
+@@ -3807,6 +3936,7 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
+ 
+ 	set_nameidata(&nd, dfd, pathname, NULL);
+ 	filp = path_openat(&nd, op, flags | LOOKUP_RCU);
++
+ 	if (unlikely(filp == ERR_PTR(-ECHILD)))
+ 		filp = path_openat(&nd, op, flags);
+ 	if (unlikely(filp == ERR_PTR(-ESTALE)))
 @@ -5098,6 +5228,11 @@ int readlink_copy(char __user *buffer, int buflen, const char *link)
   *
   * Does not call security hook.
@@ -427,10 +434,10 @@ index 1fa36df7b..104fdadfc 100644
 +				if (!res)
 +					return res;
 +			}
- 			return inode->i_op->readlink(dentry, buffer, buflen);
++			return inode->i_op->readlink(dentry, buffer, buflen);
 +		}
 +#else
-+			return inode->i_op->readlink(dentry, buffer, buflen);
+ 			return inode->i_op->readlink(dentry, buffer, buflen);
 +#endif
  
  		if (!d_is_symlink(dentry))
@@ -1278,8 +1285,8 @@ index 0544c1f58..af632ee34 100644
  
  #include <asm/elf.h>
  #include <asm/tlb.h>
-@@ -273,6 +276,13 @@ static void show_vma_header_prefix(struct seq_file *m,
- 	seq_putc(m, ' ');
+@@ -416,6 +419,13 @@ static int show_vma_header_prefix(struct seq_file *m, unsigned long start,
+ 	return 0;
  }
  
 +#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
@@ -1342,8 +1349,8 @@ index 0544c1f58..af632ee34 100644
 +
  	start = vma->vm_start;
  	end = VMA_PAD_START(vma);
- 	show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino);
-@@ -300,6 +346,17 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+ 	if (show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino))
+@@ -444,6 +490,17 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	 * Print the dentry name for named mappings, and a
  	 * special [heap] marker for the heap:
  	 */
@@ -1359,9 +1366,9 @@ index 0544c1f58..af632ee34 100644
 +#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 +
  	if (file) {
- 		seq_pad(m, ' ');
- 		seq_file_path(m, file, "\n");
-@@ -888,6 +945,26 @@ static int show_smap(struct seq_file *m, void *v)
+ 		char *buf;
+ 		size_t size = seq_get_buf(m, &buf);
+@@ -1060,6 +1117,26 @@ static int show_smap(struct seq_file *m, void *v)
  	if (!vma_pages(vma))
  		goto show_pad;
  
@@ -2111,30 +2118,29 @@ index 7595dc25d..f01800422 100644
  SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
  {
  	struct new_utsname tmp;
--	struct task_struct *t;
--	bool is_gms = false;
+	struct task_struct *t;
+	bool is_gms = false;
  
  	down_read(&uts_sem);
  	memcpy(&tmp, utsname(), sizeof(tmp));
--	up_read(&uts_sem);
--
--	rcu_read_lock();
--	for_each_thread(current, t) {
--		if (thread_group_leader(t)) {
--			is_gms = !strcmp(t->comm, "id.gms.unstable");
--			break;
--		}
--	}
--	rcu_read_unlock();
+	up_read(&uts_sem);
+
+	rcu_read_lock();
+	for_each_thread(current, t) {
+		if (thread_group_leader(t)) {
+			is_gms = !strcmp(t->comm, "id.gms.unstable");
+			break;
+		}
+	}
+	rcu_read_unlock();
 +#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
 +	susfs_spoof_uname(&tmp);
 +#endif
  
--	if (is_gms)
--		snprintf(tmp.release, sizeof(tmp.release), "%u.%u.%u",
--			 LINUX_VERSION_MAJOR, LINUX_VERSION_PATCHLEVEL,
--			 LINUX_VERSION_SUBLEVEL);
-+	up_read(&uts_sem);
+	if (is_gms)
+		snprintf(tmp.release, sizeof(tmp.release), "%u.%u.%u",
+			 LINUX_VERSION_MAJOR, LINUX_VERSION_PATCHLEVEL,
+			 LINUX_VERSION_SUBLEVEL);
  
  	if (copy_to_user(name, &tmp, sizeof(tmp)))
  		return -EFAULT;
