@@ -73,8 +73,9 @@ jobs:
           git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
           #git clone https://github.com/kerneltoast/${{ inputs.repo }}
           git clone https://github.com/bhazheng/android_kernel_google_tensynos
-          SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
-          echo "Using branch for SUSFS: $SUSFS_BRANCH"
+          # SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
+          SUSFS_BRANCH="sultan-shiba-susfs-minimal"
+          echo "Using branch for SUSFS: $"
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
 
       - name: Add KernelSU
