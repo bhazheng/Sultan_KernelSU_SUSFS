@@ -84,7 +84,7 @@ jobs:
           cd "$CONFIG"
 
           echo "Adding KernelSU..."
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/next/kernel/setup.sh" | bash -s dev-susfs
+          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
       - name: Apply SUSFS Patches
         run: |
           echo "Changing to configuration directory: $CONFIG..."
