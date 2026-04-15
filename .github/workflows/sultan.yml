@@ -85,8 +85,9 @@ jobs:
 
           echo "Adding KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash - 
-       - name: Apply SUSFS Patches
-         run: |
+          
+      - name: Apply SUSFS Patches
+        run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
