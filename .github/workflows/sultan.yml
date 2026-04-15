@@ -84,7 +84,7 @@ jobs:
           cd "$CONFIG"
 
           echo "Adding KernelSU..."
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash - 
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
           
       - name: Apply SUSFS Patches
         run: |
@@ -96,15 +96,15 @@ jobs:
           echo "Applying SUSFS patches..."
 
           # Copy SUSFS patches
-          cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch $CONFIG/KernelSU/
+          # cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch $CONFIG/KernelSU/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
           # Change to common directory and apply SUSFS patch
-          cd $CONFIG/KernelSU
-          patch -p1 < 10_enable_susfs_for_ksu.patch
-          cd "$CONFIG"
+          # cd $CONFIG/KernelSU
+          # patch -p1 < 10_enable_susfs_for_ksu.patch
+          # cd "$CONFIG"
           # cp ../kernel_patches_new/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
           patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
           echo "Applying sys.c_fix.patch from bhazheng repo..."
