@@ -95,16 +95,16 @@ jobs:
           echo "Applying SUSFS patches..."
 
           # Copy SUSFS patches
-          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
+          # cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
           # Change to common directory and apply SUSFS patch
-          #cp ../kernel_patches_new/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
+          cp ../kernel_patches_new/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
           patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
-          # echo "Applying sys.c_fix.patch from bhazheng repo..."
-          # cp ../kernel_patches_new/sys.c_fix.patch ./
-          # patch -p1 < sys.c_fix.patch
+          echo "Applying sys.c_fix.patch from bhazheng repo..."
+          cp ../kernel_patches_new/sys.c_fix.patch ./
+          patch -p1 < sys.c_fix.patch
           echo "Applying fs_namespace.patch from bhazheng repo..."
           cp ../kernel_patches_new/fs_namespace.patch ./
           patch -p1 < fs_namespace.patch
