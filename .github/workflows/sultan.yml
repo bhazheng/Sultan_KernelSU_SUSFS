@@ -74,7 +74,7 @@ jobs:
           #git clone https://github.com/kerneltoast/${{ inputs.repo }}
           git clone https://github.com/kerneltoast/android_kernel_google_tensynos
           # SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
-          SUSFS_BRANCH="gki-android14-6.1-lts-dev"
+          SUSFS_BRANCH="gki-android14-6.1-dev"
           echo "Using branch for SUSFS: $"
           git clone https://gitlab.com/pershoot/susfs4ksu.git -b "$SUSFS_BRANCH"
 
