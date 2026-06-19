@@ -72,7 +72,7 @@ jobs:
           git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
           #git clone https://github.com/kerneltoast/${{ inputs.repo }}
-          git clone https://github.com/bhazheng/android_kernel_google_tensynos
+          git clone https://github.com/kerneltoast/android_kernel_google_tensynos
           # SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           SUSFS_BRANCH="gki-android14-6.1-lts-dev"
           echo "Using branch for SUSFS: $"
