@@ -6,6 +6,9 @@ permissions:
 on:
   workflow_call: # This allows this workflow to be called from another workflow
     inputs:
+      repo:             # <--- Add this block right here
+        required: true
+        type: string
       codename:
         required: true
         type: string
