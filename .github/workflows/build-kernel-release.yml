@@ -13,7 +13,7 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      repo: "android_kernel_google_gs201"
+      repo: "android_kernel_google_tensynos"
       android_version: "android14"
       kernel_version: "6.1"
 
@@ -25,9 +25,9 @@ jobs:
       REPO_OWNER: TheWildJames
       REPO_NAME: Sultan_KernelSU_SUSFS
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_NAME: "Sultan Kernels With Resukisu & SUSFS v2.0.0"
+      RELEASE_NAME: "Sultan Kernels With Resukisu & SUSFS v2.2.0"
       RELEASE_NOTES: |
-        This release contains Resukisu and SUSFS v2.0.0
+        This release contains Resukisu and SUSFS v2.2.0
         
         ⚠️ **COMPATIBILITY NOTICE** ⚠️
         Please ensure compatibility!
