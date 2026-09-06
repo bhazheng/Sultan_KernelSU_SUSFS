@@ -219,7 +219,7 @@ jobs:
           echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           
       - name: Configure Networking
-        if: false
+        if: true
         run: |
           cd "$CONFIG"
           # Networking Configuration
@@ -230,7 +230,7 @@ jobs:
 
       - name: Add IP SET & IPv6_NAT Support
         shell: bash
-        if: false
+        if: true
         run: |
           cd "$CONFIG"
           cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
@@ -260,7 +260,6 @@ jobs:
 
       - name: Apply TCP Congestion Control
         shell: bash
-        if: false
         run: |
           cd "$CONFIG"
           cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
@@ -274,6 +273,7 @@ jobs:
           CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_NET_SCH_FQ=y
           CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
           EOF
       
       - name: Run sed and perl Commands
