@@ -92,33 +92,38 @@ jobs:
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
+          rm -rf KernelSU drivers/kernelsu drivers/KernelSU
+
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Adding KernelSU-Next..."
-            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash
+            echo "[+] Adding KernelSU-Next (dev-susfs)..."
+            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             echo "[+] Adding ReSukiSU..."
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
           fi
+
+          grep -q "KernelSU" drivers/Makefile || echo "obj-y += KernelSU/" >> drivers/Makefile
 
       - name: Apply SUSFS Patches
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          echo "Applying SUSFS patches..."
-          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
+          echo "Applying SuSFS common patches..."
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
-          patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
+            patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          fi
           
-          echo "Applying sys.c_fix.patch from bhazheng repo..."
+          echo "Applying fix patches from bhazheng repo..."
           cp ../kernel_patches_new/sys.c_fix.patch ./
-          patch -p1 < sys.c_fix.patch
+          patch -p1 < sys.c_fix.patch || true
 
-          echo "Applying fix_open.patch from bhazheng repo..."
           cp ../kernel_patches_new/fix_open.patch ./
-          patch -p1 < fix_open.patch
+          patch -p1 < fix_open.patch || true
 
       - name: Apply BBRv3 Patch (Android14-6.1)
         shell: bash
@@ -139,20 +144,20 @@ jobs:
           REPO_RAW="https://raw.githubusercontent.com/WildKernels/kernel_patches/main"
 
           # 1. Matikan Logspam CPU IRQ & System
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true[cite: 1]
 
           # 2. Optimasi Memori & Operasi AArch64
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true[cite: 1]
 
           # 3. Optimasi Latensi TCP & Socket Memory Packets
-          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true[cite: 1]
 
           # 4. Tweak I/O Storage F2FS
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true[cite: 1]
 
           echo "[+] Category 1 patches applied successfully"
 
@@ -195,7 +200,7 @@ jobs:
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
           else
             if ! [[ "$requested_commit" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "NoMount commit must be a full 40-character SHA." >&2
+              echo "NoMount commit must be a full 40-character SHA." >&2[cite: 1]
               exit 2
             fi
             setup_script="${RUNNER_TEMP}/nomount-setup-${requested_commit}.sh"
@@ -213,7 +218,7 @@ jobs:
             "$setup_script" "$requested_commit"
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
             if [ "$actual_commit" != "$requested_commit" ]; then
-              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2
+              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2[cite: 1]
               exit 1
             fi
           fi
@@ -286,7 +291,7 @@ jobs:
 
           cat >> "$DEFCONFIG" << 'EOF'
 
-          # KernelSU & SuSFS Configuration
+          # KernelSU & SuSFS Core Requirements
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -308,7 +313,9 @@ jobs:
           CONFIG_ARCH_SUPPORTS_THINLTO=y
           CONFIG_LTO_NONE=n
 
-          # Kallsyms & OverlayFS
+          # Dependensi Wajib KernelSU
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
           CONFIG_KALLSYMS=y
           CONFIG_KALLSYMS_ALL=y
           CONFIG_OVERLAY_FS=y
@@ -385,23 +392,24 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
           echo "Running sed commands..."
-          sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
-          sed -i '/echo "+"$/d' scripts/setlocalversion
-          sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
+          sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig[cite: 1]
+          sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true[cite: 1]
+          sed -i '/echo "+"$/d' scripts/setlocalversion[cite: 1]
+          sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true[cite: 1]
 
       - name: Build the Kernel with AOSP Clang r614150 (ThinLTO)
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
           
+          mkdir -p out
           export PATH="$CLANG_PATH:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
 
           ccache -s
 
-          # Generate Defconfig
+          # 1. Generate Defconfig
           make -j$(nproc --all) \
             O=out \
             ARCH=arm64 \
@@ -412,7 +420,11 @@ jobs:
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
             ${{ inputs.codename }}_defconfig
 
-          # Compile Kernel with ThinLTO & Polly optimizations
+          # Verifikasi konfigurasi KSU di file .config aktif
+          echo "=== Verifikasi Status Config KSU ==="
+          grep -E "CONFIG_KSU|CONFIG_KALLSYMS|CONFIG_KPROBES" out/.config || true
+
+          # 2. Compile Kernel dengan ThinLTO & Fallback Single-Thread jika Error
           make -j$(nproc --all) \
             O=out \
             ARCH=arm64 \
@@ -421,9 +433,23 @@ jobs:
             LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            KCFLAGS="-O3 -mllvm -polly -mllvm -polly-run-dce" \
+            KCFLAGS="-O3" \
             KCPPFLAGS="-O3" \
-            LOCALVERSION_AUTO=0
+            LOCALVERSION_AUTO=0 || {
+              echo "::error::Build paralel Clang gagal. Menjalankan single-thread untuk melacak baris eror:"
+              make \
+                O=out \
+                ARCH=arm64 \
+                CC="ccache clang" \
+                LLVM=1 \
+                LLVM_IAS=1 \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+                KCFLAGS="-O3" \
+                KCPPFLAGS="-O3" \
+                LOCALVERSION_AUTO=0 -j1
+              exit 1
+            }
 
           ccache -s
 
@@ -432,13 +458,13 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
           echo "Copying Image.lz4 and concatenating DTB files..."
-          cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
+          cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4[cite: 1]
           if [ "${{ inputs.codename }}" == "gs201" ]; then
-            cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb
+            cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb[cite: 1]
           elif [ "${{ inputs.codename }}" == "zuma" ]; then
-            cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb
+            cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb[cite: 1]
           elif [ "${{ inputs.codename }}" == "zumapro" ]; then
-            cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
+            cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb[cite: 1]
           fi
 
       - name: Create ZIP Files for Different Formats
@@ -447,7 +473,7 @@ jobs:
           cd ./AnyKernel3
           ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan.zip"
           echo "Creating zip file $ZIP_NAME..."
-          zip -r "../$ZIP_NAME" ./*
+          zip -r "../$ZIP_NAME" ./*[cite: 1]
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
@@ -499,7 +525,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej
+          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej[cite: 1]
 
       - name: Upload .rej bundle
         if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
