@@ -75,7 +75,10 @@ jobs:
           echo "[+] Cloning dependencies in parallel..."
           git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" &
           git clone --depth=1 https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new &
-          git clone --depth=1 https://github.com/bhazheng/android_kernel_google_tensynos &
+          
+          # Repositori kernel wajib di-clone penuh (tanpa --depth=1) agar skrip WLAN/UWB Google dapat melacak HEAD
+          git clone https://github.com/bhazheng/android_kernel_google_tensynos &
+          
           git clone --depth=1 https://gitlab.com/pershoot/susfs4ksu.git -b "gki-android14-6.1" &
           wait
 
@@ -90,14 +93,19 @@ jobs:
             curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-            # Fix static export check ReSukiSU
+            # Menghapus sifat 'static' agar simbol dapat diekspor untuk ReSukiSU
             sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c
             grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
           fi
 
-          # Linker Kbuild yang presisi
-          [ -d "KernelSU/kernel" ] && ln -sfn ../KernelSU/kernel drivers/kernelsu
+          # Linker presisi agar sesuai dengan pemanggilan Makefile Kbuild
+          if [ -d "KernelSU/kernel" ]; then
+            ln -sfn ../KernelSU/kernel drivers/kernelsu
+            ln -sfn ../KernelSU/kernel drivers/KernelSU
+          fi
+
           sed -i '/[Kk]ernelSU/d' drivers/Makefile
+          sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
       - name: Apply SUSFS & Optimization Patches
@@ -110,16 +118,14 @@ jobs:
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
-          # Trik Perl dari sultanori + Patching
-          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
-            patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
-            perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
-          fi
+          # Trik Perl dan Patch SuSFS diaplikasikan universal ke SEMUA varian agar ReSukiSU tidak kehilangan hook utama
+          perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
+          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
           
           patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
 
-          # Apply BBRv3, Unicode, & Performance Patches with Array Loop (Cleaner YAML)
+          # Apply BBRv3, Unicode, & Performance Patches via Loop Array
           REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
           PATCHES=(
             "bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
@@ -137,7 +143,7 @@ jobs:
             curl -fsSL --retry 3 "$REPO/$p" | patch -p1 --forward || true
           done
 
-          # Remove protected exports
+          # Remove protected exports (OOT modules)
           sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
@@ -161,14 +167,12 @@ jobs:
           MOD_DIR="nomount_mod"
           ZIP_OUT="NoMount-${COMMIT_HASH}.zip"
 
-          # 1. Bersihkan direktori sisa build sebelumnya
           rm -rf "$SRC_DIR" "$MOD_DIR"
-
-          # 2. Lakukan Git Clone LEBIH DULU
+          
+          # Clone repository SEBELUM membuat sub-direktori (mencegah eror folder tidak kosong)
           git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
           git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
-
-          # 3. BARU buat direktori bin di dalamnya
+          
           mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin"
 
           (
@@ -191,8 +195,6 @@ jobs:
         shell: bash
         run: |
           cd "$CONFIG"
-          # Kita hanya inject Networking, BBR, CIFS, & Debug di sini.
-          # KSU dan kprobes diurus mutlak oleh scripts/config nanti.
           cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
           CONFIG_DEBUG_INFO=y
           CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
@@ -273,7 +275,7 @@ jobs:
           # 1. Defconfig dasar
           make O=out -j$(nproc --all) ${{ inputs.codename }}_defconfig
 
-          # 2. Injeksi & kunci KSU secara mutlak menggunakan script
+          # 2. Injeksi mutlak konfigurasi KSU dan Kprobes
           ./scripts/config --file out/.config \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
@@ -318,7 +320,6 @@ jobs:
           cd "$CONFIG"
           cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           
-          # Catatan: sultanori.yml mematikan dtb concatenation. Jika butuh DTB, uncomment if statement di bawah.
           if [ "${{ inputs.codename }}" == "gs201" ]; then
              cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb
           elif [ "${{ inputs.codename }}" == "zuma" ]; then
@@ -366,3 +367,47 @@ jobs:
           path: |
             ${{ github.workspace }}/NoMount-*.zip
             ${{ github.workspace }}/NoMount-*.sha256
+
+      - name: Collect .rej files
+        if: ${{ always() }}
+        id: collect_rej
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          rm -rf rej
+          mkdir -p rej
+
+          found="false"
+          while IFS= read -r -d '' rej_file; do
+            found="true"
+            original_file="${rej_file%.rej}"
+            rej_rel="${rej_file#./}"
+            original_rel="${original_file#./}"
+
+            mkdir -p "rej/$(dirname "$rej_rel")"
+            cp -f "$rej_file" "rej/$rej_rel"
+
+            if [[ -f "$original_file" ]]; then
+              mkdir -p "rej/$(dirname "$original_rel")"
+              cp -f "$original_file" "rej/$original_rel"
+            fi
+          done < <(find . -type f -name '*.rej' -print0)
+
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Zip collected .rej bundle
+        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej
+
+      - name: Upload .rej bundle
+        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rej-${{ inputs.codename }}-${{ matrix.variant }}
+          path: |
+            rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
