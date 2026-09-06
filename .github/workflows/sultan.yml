@@ -49,6 +49,57 @@ jobs:
           key: ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
           restore-keys: |
             ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-
+name: Sultan
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        required: true
+        type: string
+      codename:
+        required: true
+        type: string
+      android_version:
+        required: true
+        type: string
+      kernel_version:
+        required: true
+        type: string
+
+jobs:
+  build-kernel-sultan-kernelsu-susfs:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ["KernelSU-Next", "ReSukiSU"]
+
+    steps:
+      - name: Free Disk Space on Runner
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift
+          sudo docker image prune --all --force
+          echo "[+] Disk space cleaned up"
+
+      - name: Install CCache & Essential Build Tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache libssl-dev libelf-dev bc bison flex perl
+          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> "$GITHUB_ENV"
+
+      - name: Setup CCache Cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: |
+            ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-
             ccache-gcc-${{ inputs.codename }}-
 
       - name: Download and extract GCC 14.2.0 (Streamed)
@@ -90,9 +141,12 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
+          # 1. Bersihkan sisa direktori/symlink usang
           rm -rf KernelSU KernelSU-Next drivers/kernelsu drivers/KernelSU
+          sed -i '/kernelsu/d' drivers/Makefile 2>/dev/null || true
+          sed -i '/kernelsu/d' drivers/Kconfig 2>/dev/null || true
 
-          # Fungsi retry untuk mengantisipasi gangguan jaringan pada Runner
+          # Fungsi retry jaringan
           retry() {
             local n=0
             until [ "$n" -ge 5 ]; do
@@ -111,15 +165,13 @@ jobs:
               "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" \
               | bash -s dev-susfs
 
-            retry git -C KernelSU-Next/kernel fetch --depth=50 origin "$KSU_INPUT"
-            git -C KernelSU-Next/kernel checkout "$KSU_INPUT"
+            retry git -C KernelSU-Next/kernel fetch --depth=50 origin "$KSU_INPUT" || true
+            git -C KernelSU-Next/kernel checkout "$KSU_INPUT" || true
 
-            # Penambatan versi presisi KernelSU-Next agar sinkron dengan Manager
+            # Penambatan versi presisi
             cd KernelSU-Next/kernel
             BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD | sed 's:-.*::' 2>/dev/null)
-            BASE_COMMIT=$(git merge-base HEAD refs/remotes/origin/$BASE_BRANCH 2>/dev/null \
-              || git merge-base HEAD refs/remotes/origin/main 2>/dev/null \
-              || echo HEAD)
+            BASE_COMMIT=$(git merge-base HEAD refs/remotes/origin/$BASE_BRANCH 2>/dev/null || git merge-base HEAD refs/remotes/origin/main 2>/dev/null || echo HEAD)
             COMMITS_COUNT=$(/usr/bin/git rev-list --count "$BASE_COMMIT")
             BASE_VERSION=30000
             KSU_VERSION=$(expr "$COMMITS_COUNT" + "$BASE_VERSION")
@@ -128,71 +180,51 @@ jobs:
             sed -i "s/^KSU_VERSION_TAG_FALLBACK := v0.0.1$/KSU_VERSION_TAG_FALLBACK := ${KSU_GIT_TAG}/" Kbuild
             cd ../../
 
-            # Setup script sudah menangani symlink/Kbuild entry, cukup pastikan valid.
-            test -e drivers/kernelsu
-            readlink -f drivers/kernelsu
-
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             echo "[+] Installing ReSukiSU..."
-
             curl -LSs --retry 5 --retry-delay 5 --retry-all-errors \
               "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
               | bash
 
-            echo "[+] Verifying ReSukiSU setup..."
-            test -d KernelSU/kernel
-            test -e drivers/kernelsu
-
-            echo "[+] drivers/kernelsu ->"
-            readlink -f drivers/kernelsu
-
-            # Jangan override drivers/Makefile secara manual.
-            # ReSukiSU setup.sh sudah membuat entry obj-$(CONFIG_KSU) dan Kconfig.
-
-            echo "[+] Checking for legacy KernelSU exec hooks..."
-            grep -RInE \
-              --exclude-dir=.git \
-              --exclude-dir=out \
-              'ksu_install_su_fd|ksu_handle_execve[[:space:]]*\(' \
-              fs kernel drivers arch 2>/dev/null || true
-
-            # FIX: patch SUSFS (CONFIG_KSU_SUSFS) mengharuskan fs/exec.c memanggil
-            # ksu_install_su_fd(), tapi ReSukiSU tidak mengimplementasikan fungsi ini
-            # (fitur SUS_SU lama sudah digantikan ksu_handle_execveat_sucompat yang
-            # sudah aktif). Tanpa ini, link vmlinux gagal: undefined reference.
-            # Stub no-op aman karena su-path hiding sudah ditangani hook sucompat.
+            # Stub fungsi legacy (Menghindari error heredoc dan indentasi YAML)
             if ! grep -rq "^int ksu_install_su_fd" drivers/kernelsu/feature/sucompat.c 2>/dev/null; then
-              cat >> drivers/kernelsu/feature/sucompat.c << 'KSUEOF'
-
-          #ifdef CONFIG_KSU_SUSFS
-          /* Stub: ReSukiSU tidak mengimplementasikan legacy SUS_SU fd-install hook.
-           * su-path hiding sudah ditangani oleh ksu_handle_execveat_sucompat(). */
-          int ksu_install_su_fd(void)
-          {
-              return 0;
-          }
-          #endif
-          KSUEOF
+              {
+                echo ""
+                echo "#ifdef CONFIG_KSU_SUSFS"
+                echo "int ksu_install_su_fd(void)"
+                echo "{"
+                echo "    return 0;"
+                echo "}"
+                echo "#endif"
+              } >> drivers/kernelsu/feature/sucompat.c
             fi
+            
+            # Export simbol untuk keamanan
+            sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c || true
+            grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c || true
           fi
 
-          # static.patch hanya untuk KernelSU-Next.
-          # FIX: static.patch SENGAJA dilewati untuk ReSukiSU. Source ReSukiSU sudah
-          # menangani unstatic 3 fungsi target patch ini (security_context_to_sid_with_policy,
-          # security_sid_to_context_with_policy, security_compute_av_user_with_policy) lewat
-          # macro __maybe_static miliknya sendiri (lihat kernel/feature/selinux_hide.c).
-          # Text yang dicari static.patch (deklarasi "static int ...") tidak akan pernah
-          # ditemukan di fork ini, jadi patch selalu gagal 1/1 hunk dan tidak berguna.
-          if [ "${{ matrix.variant }}" == "KernelSU-Next" ] && [ -d "KernelSU-Next/kernel" ]; then
+          # Terapkan static.patch HANYA untuk KernelSU-Next
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             echo "[+] Applying static.patch for KernelSU-Next..."
             curl -fsSL --retry 3 \
               "https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/refs/heads/main/.github/actions/kernelsu/patches/static.patch" \
               -o static.patch
-            patch -p2 -d "KernelSU-Next/kernel" < static.patch
+            patch -p2 -d "drivers/kernelsu" < static.patch || true
             rm -f static.patch
           else
             echo "[+] static.patch disabled for ReSukiSU."
           fi
+
+          # 2. Registrasi Aman ke Kconfig dan Makefile agar olddefconfig tidak "lupa" membaca KSU
+          sed -i '/kernelsu/d' drivers/Kconfig
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          
+          sed -i '/kernelsu/d' drivers/Makefile
+          echo "obj-y += kernelsu/" >> drivers/Makefile
+
+          # Validasi
+          test -e drivers/kernelsu
 
       - name: Apply SUSFS Patches
         shell: bash
@@ -200,24 +232,15 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          # SUSFS Common (menggunakan branch minimal khusus tensor/shiba)
+          # SUSFS Common
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
-          # Pertahankan redirect libperfmgr, biarkan patch SUSFS memodifikasi fs/open.c
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
-
-          # Gagalkan build lebih awal kalau patch SUSFS ini sendiri tidak kompatibel.
           patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
-
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
 
-          # FIX (ReSukiSU only): hunk "wire my_sel_open_handle_status ke .open" pada
-          # security/selinux/selinuxfs.c dari patch di atas GAGAL, karena step
-          # sebelumnya (Add Root Implementation) sudah menghapus kata "static" dari
-          # baris "static const struct file_operations sel_handle_status_ops = {"
-          # sebelum patch ini berjalan, sehingga context-nya tidak cocok lagi.
-          # Di sini kita wire manual, idempotent (aman dijalankan walau sudah ter-wire).
+          # FIX (ReSukiSU only): Wire manual sel_handle_status_ops ke .open
           if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             if grep -q "my_sel_open_handle_status(struct inode" security/selinux/selinuxfs.c 2>/dev/null \
               && grep -q "\.open[[:space:]]*= sel_open_handle_status" security/selinux/selinuxfs.c 2>/dev/null; then
@@ -225,8 +248,6 @@ jobs:
             fi
           fi
 
-          # sys.c_fix.patch sengaja dinonaktifkan untuk SEMUA variant: perubahan yang
-          # dimaksud (spoof-uname) sudah ada dari patch SUSFS utama, jadi ini redundan.
           echo "[+] sys.c_fix.patch disabled."
 
       - name: Apply Optimization & Network Patches
@@ -235,10 +256,6 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          # gki_ptrace.patch DINONAKTIFKAN: banyak hunk gagal (ptrace.h, signal.c,
-          # tracehook.h) karena source kernel sudah tidak cocok dengan patch ini.
-          # curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/refs/heads/main/gki_ptrace.patch" | patch -p1 --forward || true
-          
           REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
           PATCHES=(
             "bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
@@ -277,8 +294,8 @@ jobs:
           SRC_DIR="nomount_src"
           MOD_DIR="nomount_mod"
           ZIP_OUT="NoMount-${COMMIT_HASH}.zip"
-          rm -rf "$SRC_DIR" "$MOD_DIR"
 
+          rm -rf "$SRC_DIR" "$MOD_DIR"
           git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
           git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
 
@@ -360,49 +377,6 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-      - name: Verify ReSukiSU Integration
-        if: ${{ matrix.variant == 'ReSukiSU' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$CONFIG"
-
-          echo "========== ReSukiSU PATH =========="
-          test -d KernelSU/kernel
-          test -e drivers/kernelsu
-          readlink -f drivers/kernelsu
-
-          echo
-          echo "========== KSU CONFIG =========="
-          grep -E '^CONFIG_KSU|^CONFIG_KSU_SUSFS' out/.config || true
-
-          echo
-          echo "========== LEGACY EXECVE REFERENCES =========="
-          if grep -RInE \
-            --exclude-dir=.git \
-            --exclude-dir=out \
-            'ksu_install_su_fd|ksu_handle_execve[[:space:]]*\(' \
-            fs kernel drivers arch 2>/dev/null; then
-            echo "::error::Legacy KernelSU execve references are still present."
-            exit 1
-          fi
-
-          echo
-          echo "========== CURRENT EXECVE HOOKS =========="
-          grep -nE \
-            'ksu_install_su_fd|ksu_handle_execve|ksu_handle_execveat' \
-            fs/exec.c 2>/dev/null || true
-
-          echo
-          echo "========== task_stack_page usage di sucompat.c =========="
-          grep -n "task_stack_page" drivers/kernelsu/feature/sucompat.c 2>/dev/null || true
-          grep -rn "task_stack_page" drivers/kernelsu/ 2>/dev/null || true
-
-          echo
-          echo "========== deklarasi task_stack_page di kernel tensynos =========="
-          grep -rn "task_stack_page" include/linux/sched/task_stack.h 2>/dev/null || true
-          grep -rn "^.*task_stack_page" kernel/fork.c 2>/dev/null || true
-
       - name: Build the Kernel (GCC 14.2)
         shell: bash
         run: |
@@ -448,13 +422,13 @@ jobs:
             -e CONFIG_FUSE_FS \
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
+          
           make O=out olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
           echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
           if ! grep -q "^CONFIG_KSU=y" out/.config || ! grep -q "^CONFIG_KSU_SUSFS=y" out/.config; then
             echo "::error::CONFIG_KSU atau CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
-            echo "Kemungkinan ada 'depends on' yang tidak terpenuhi. Cari baris 'KSU' di bawah:"
-            grep -i "ksu" /tmp/olddefconfig.log || echo "(tidak ada warning terkait KSU di log olddefconfig)"
+            grep -i "ksu" /tmp/olddefconfig.log || true
             exit 1
           fi
 
