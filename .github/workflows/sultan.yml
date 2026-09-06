@@ -44,7 +44,7 @@ jobs:
       - name: Setup CCache Cache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}.ccache
+          path: ${{ github.workspace }}/.ccache
           key: ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
           restore-keys: |
             ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-
@@ -87,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$CONFIG"
-          rm -rf KernelSU drivers/kernelsu drivers/KernelSU
+          rm -rf KernelSU KernelSU-Next drivers/kernelsu drivers/KernelSU
 
           # Fungsi retry untuk mengantisipasi gangguan jaringan pada Runner
           retry() {
@@ -107,16 +107,16 @@ jobs:
 
             if retry git ls-remote --heads "$KSU_REPO" "$KSU_INPUT" | grep -q .; then
               curl -LSs --retry 5 --retry-delay 5 --retry-all-errors "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
-              retry git -C KernelSU/kernel fetch --depth=50 origin "$KSU_INPUT"
-              git -C KernelSU/kernel checkout "origin/$KSU_INPUT"
+              retry git -C KernelSU-Next/kernel fetch --depth=50 origin "$KSU_INPUT"
+              git -C KernelSU-Next/kernel checkout "origin/$KSU_INPUT"
             else
               curl -LSs --retry 5 --retry-delay 5 --retry-all-errors "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
-              retry git -C KernelSU/kernel fetch --depth=50 origin "$KSU_INPUT"
-              git -C KernelSU/kernel checkout "$KSU_INPUT"
+              retry git -C KernelSU-Next/kernel fetch --depth=50 origin "$KSU_INPUT"
+              git -C KernelSU-Next/kernel checkout "$KSU_INPUT"
             fi
 
-            # Penambatan versi presisi ala action.yml agar sinkron dengan Manager[cite: 1]
-            cd KernelSU/kernel
+            # Penambatan versi presisi KernelSU-Next agar sinkron dengan Manager
+            cd KernelSU-Next/kernel
             BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD | sed 's:-.*::' 2>/dev/null)
             BASE_COMMIT=$(git merge-base HEAD refs/remotes/origin/$BASE_BRANCH 2>/dev/null || git merge-base HEAD refs/remotes/origin/main 2>/dev/null || echo HEAD)
             COMMITS_COUNT=$(/usr/bin/git rev-list --count $BASE_COMMIT)
@@ -130,17 +130,31 @@ jobs:
 
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+            
+            # Penanganan wajib untuk simbol statis ReSukiSU
+            sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c || true
+            grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c || true
           fi
 
-          # Terapkan static.patch ke SEMUA varian root
-          echo "[+] Downloading and applying static.patch universally..."
+          # Unduh dan terapkan static.patch secara kondisional ke folder root yang tepat
+          echo "[+] Downloading and applying static.patch..."
           curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/refs/heads/main/.github/actions/kernelsu/patches/static.patch" -o static.patch
-          patch -p1 < static.patch || true
+          
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ] && [ -d "KernelSU-Next/kernel" ]; then
+            patch -p1 -d "KernelSU-Next/kernel" < static.patch || true
+          elif [ "${{ matrix.variant }}" == "ReSukiSU" ] && [ -d "KernelSU/kernel" ]; then
+            patch -p1 -d "KernelSU/kernel" < static.patch || true
+          fi
+          
           rm -f static.patch
 
-          if [ -d "KernelSU/kernel" ]; then
-            ln -sfn ../KernelSU/kernel drivers/kernelsu
-            ln -sfn ../KernelSU/kernel drivers/KernelSU
+          # Pengaturan symlink dinamis berdasarkan varian
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ] && [ -d "KernelSU-Next/kernel" ]; then
+            ln -sfn ../KernelSU-Next/kernel drivers/kernelsu
+            ln -sfn ../KernelSU-Next/kernel drivers/KernelSU
+          elif [ "${{ matrix.variant }}" == "ReSukiSU" ] && [ -d "KernelSU/kernel" ]; then
+            ln -sfn ../Kernel/kernel drivers/kernelsu
+            ln -sfn ../Kernel/kernel drivers/KernelSU
           fi
 
           sed -i '/[Kk]ernelSU/d' drivers/Makefile
@@ -170,6 +184,9 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
           
+          # Terapkan gki_ptrace.patch langsung dari WildKernels
+          curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/refs/heads/main/gki_ptrace.patch" | patch -p1 --forward || true
+
           REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
           PATCHES=(
             "bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
