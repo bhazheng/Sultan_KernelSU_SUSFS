@@ -1,12 +1,12 @@
 name: Sultan
 permissions:
-  contents: write # Allow writing to repository contents (for pushing tags)
-  actions: write # Allows triggering actions
+  contents: write
+  actions: write
 
 on:
-  workflow_call: # This allows this workflow to be called from another workflow
+  workflow_call:
     inputs:
-      repo:             # <--- Add this block right here
+      repo:
         required: true
         type: string
       codename:
@@ -27,19 +27,6 @@ jobs:
       matrix:
         variant: ["RKSU"]
     steps:
-      #- name: Maximize Build Space
-      #  uses: AdityaGarg8/remove-unwanted-software@v5
-      #  with:
-      #    remove-dotnet: 'true'          # Frees ~2 GB
-      #    remove-android: 'true'         # Frees ~9 GB
-      #    remove-haskell: 'true'         # Frees ~5.2 GB
-      #    remove-codeql: 'true'          # Frees ~5.4 GB
-      #    remove-docker-images: 'true'   # Frees ~3.2 GB
-      #    remove-large-packages: 'true'  # Frees ~3.1 GB
-      #    remove-swapfile: 'true'        # Frees ~4 GB
-      #    remove-cached-tools: 'false'   # Avoid unless confirmed safe
-      #    verbose: 'true'                # Enable detailed logging
-
       - name: Download and extract GCC 14.2.0 toolchain
         run: |
           echo "Downloading GCC 14.2.0 cross-compiler toolchain..."
@@ -53,118 +40,53 @@ jobs:
       - name: Set CONFIG Environment Variable
         run: |
           CONFIG="android_kernel_google_tensynos"
-
-          # Set CONFIG as an environment variable for future steps
           echo "CONFIG=$CONFIG" >> $GITHUB_ENV
-
           echo "CONFIG set to: $CONFIG"
 
       - name: Clone AnyKernel3 and Other Dependencies
         run: |
           echo "Cloning AnyKernel3 and other dependencies..."
-
           ANYKERNEL_BRANCH="sultan-${{ inputs.codename }}"
-
-          # Debug print the branches
           echo "Using branch for AnyKernel3: $ANYKERNEL_BRANCH"
 
-          # Clone repositories using the branch names
           git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
-          #git clone https://github.com/kerneltoast/${{ inputs.repo }}
           git clone https://github.com/bhazheng/android_kernel_google_tensynos
-          # SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           SUSFS_BRANCH="gki-android14-6.1"
-          echo "Using branch for SUSFS: $"
+          echo "Using branch for SUSFS: $SUSFS_BRANCH"
           git clone https://gitlab.com/pershoot/susfs4ksu.git -b "$SUSFS_BRANCH"
 
       - name: Add KernelSU
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
-
           echo "Adding KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash
-          
+
       - name: Apply SUSFS Patches
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          SUSFS_VERSION="2.3.0"
-
           echo "Applying SUSFS patches..."
-
-          # Copy SUSFS patches
-          # cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch $CONFIG/KernelSU/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
-          # Change to common directory and apply SUSFS patch
-          # cd $CONFIG/KernelSU
-          # patch -p1 < 10_enable_susfs_for_ksu.patch
-          # cd "$CONFIG"
-          # cp ../kernel_patches_new/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
           patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          
           echo "Applying sys.c_fix.patch from bhazheng repo..."
           cp ../kernel_patches_new/sys.c_fix.patch ./
           patch -p1 < sys.c_fix.patch
-          # echo "Applying fs_namespace.patch from bhazheng repo..."
-          # cp ../kernel_patches_new/fs_namespace.patch ./
-          # patch -p1 < fs_namespace.patch
+
           echo "Applying fix_open.patch from bhazheng repo..."
           cp ../kernel_patches_new/fix_open.patch ./
           patch -p1 < fix_open.patch
 
-      - name: Configure KernelSU
-        run: |
-          cd "$CONFIG"
-          # KernelSU Configuration
-          echo "# KernelSU Configuration" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_THREAD_INFO_IN_TASK=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-
-      - name: Configure Mountify Support
-        run: |
-          cd "$CONFIG"
-          # Mountify Support
-          echo "# Mountify Support" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_TMPFS_XATTR=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          
-      - name: Configure BTF, eBPF and FUSE-BPF
-        run: |
-          cd "$CONFIG"
-          DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
-
-          echo "# BTF & eBPF Support" >> $DEFCONFIG
-          echo "CONFIG_DEBUG_INFO_BTF=y" >> $DEFCONFIG
-          echo "CONFIG_BPF_EVENTS=y" >> $DEFCONFIG
-          echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
-          echo "CONFIG_UPROBES=y" >> $DEFCONFIG
-          echo "CONFIG_UPROBE_EVENTS=y" >> $DEFCONFIG
-
-          echo "# FUSE-BPF Support" >> $DEFCONFIG
-          echo "CONFIG_FUSE_FS=y" >> $DEFCONFIG
-          echo "CONFIG_BPF_SYSCALL=y" >> $DEFCONFIG
-          echo "CONFIG_FUSE_BPF=y" >> $DEFCONFIG
-          
-      - name: Setup NoMount
+      - name: Integrate NoMount
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$CONFIG"
           KERNEL_DIR="$(pwd)"
 
@@ -173,7 +95,6 @@ jobs:
             exit 1
           }
 
-          # Kosongkan jika ingin latest dev tip, atau isi dengan 40-digit commit SHA jika ingin di-pin
           requested_commit=""
 
           if [ -z "$requested_commit" ]; then
@@ -197,7 +118,7 @@ jobs:
             fi
             git -C "$KERNEL_DIR/NoMount" fetch --depth=1 origin "$requested_commit"
             git -C "$KERNEL_DIR/NoMount" checkout --detach --quiet "$requested_commit"
-            
+
             "$setup_script" "$requested_commit"
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
             if [ "$actual_commit" != "$requested_commit" ]; then
@@ -214,26 +135,47 @@ jobs:
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
           echo "NoMount integrated successfully (commit: $actual_commit)"
 
-          # Enable CONFIG_NOMOUNT langsung ke defconfig device
-          echo "# NoMount Configuration" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          
-      - name: Configure Networking
-        if: true
-        run: |
-          cd "$CONFIG"
-          # Networking Configuration
-          echo "# Networking Configuration" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_IP_NF_TARGET_TTL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_IP6_NF_TARGET_HL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_IP6_NF_MATCH_HL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-
-      - name: Add IP SET & IPv6_NAT Support
+      - name: Apply All Kernel Configurations
         shell: bash
-        if: true
         run: |
           cd "$CONFIG"
-          cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
+          DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+
+          cat >> "$DEFCONFIG" << 'EOF'
+
+          # KernelSU & SuSFS Configuration
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_THREAD_INFO_IN_TASK=y
+
+          # NoMount & Mountify
+          CONFIG_NOMOUNT=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+
+          # eBPF & FUSE-BPF
+          CONFIG_BPF_EVENTS=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_UPROBES=y
+          CONFIG_UPROBE_EVENTS=y
+          CONFIG_FUSE_FS=y
+          CONFIG_BPF_SYSCALL=y
+          CONFIG_FUSE_BPF=y
+
+          # Networking, TTL/HL, IPSET & IPv6 NAT
+          CONFIG_IP_NF_TARGET_TTL=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP6_NF_MATCH_HL=y
+          CONFIG_NET_ACT_CONNMARK=y
           CONFIG_IP_SET=y
           CONFIG_IP_SET_MAX=65534
           CONFIG_IP_SET_BITMAP_IP=y
@@ -254,15 +196,12 @@ jobs:
           CONFIG_IP_SET_LIST_SET=y
           CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
           CONFIG_NETFILTER_XT_SET=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
           CONFIG_IP6_NF_NAT=y
           CONFIG_IP6_NF_TARGET_MASQUERADE=y
-          EOF
 
-      - name: Apply TCP Congestion Control
-        shell: bash
-        run: |
-          cd "$CONFIG"
-          cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
+          # TCP Congestion Control & Queueing Disciplines
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_TCP_CONG_CUBIC=y
@@ -274,24 +213,28 @@ jobs:
           CONFIG_NET_SCH_FQ=y
           CONFIG_NET_SCH_FQ_CODEL=y
           CONFIG_NET_SCH_CAKE=y
+
+          # CIFS / SMB Network Filesystem
+          CONFIG_NETWORK_FILESYSTEMS=y
+          CONFIG_NETFS_SUPPORT=y
+          CONFIG_KEYS=y
+          CONFIG_CIFS=y
+          CONFIG_CIFS_XATTR=y
+          CONFIG_CIFS_POSIX=y
           EOF
-      
+
       - name: Run sed and perl Commands
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
-
           echo "Running sed commands..."
           sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-Wild"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-
           sed -i '/echo "+"$/d' scripts/setlocalversion
-
 
       - name: Build the Kernel
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
-
           make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
           make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc LOCALVERSION_AUTO=0 -j$(nproc --all)
 
@@ -299,24 +242,20 @@ jobs:
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
-
           echo "Copying Image.lz4 and concatenating DTB files..."
           cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           if [ "${{ inputs.codename }}" == "gs201" ]; then
             cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb
-            #cp ./out/google-devices/gs201/dts/dtbo.img ../AnyKernel3/dtbo.img
           elif [ "${{ inputs.codename }}" == "zuma" ]; then
             cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb
           elif [ "${{ inputs.codename }}" == "zumapro" ]; then
             cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
           fi
-         
+
       - name: Create ZIP Files for Different Formats
         run: |
           echo "Navigating to AnyKernel3 directory..."
           cd ./AnyKernel3
-
-          # Zip the files in the AnyKernel3 directory with a new naming convention
           ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan.zip"
           echo "Creating zip file $ZIP_NAME..."
           zip -r "../$ZIP_NAME" ./*
@@ -334,7 +273,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$GITHUB_WORKSPACE"
           rm -rf rej
           mkdir -p rej
