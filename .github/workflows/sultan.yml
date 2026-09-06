@@ -143,6 +143,23 @@ jobs:
           echo "CONFIG_TMPFS_XATTR=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           
+      - name: Configure BTF, eBPF and FUSE-BPF
+        run: |
+          cd "$CONFIG"
+          DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+
+          echo "# BTF & eBPF Support" >> $DEFCONFIG
+          echo "CONFIG_DEBUG_INFO_BTF=y" >> $DEFCONFIG
+          echo "CONFIG_BPF_EVENTS=y" >> $DEFCONFIG
+          echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
+          echo "CONFIG_UPROBES=y" >> $DEFCONFIG
+          echo "CONFIG_UPROBE_EVENTS=y" >> $DEFCONFIG
+
+          echo "# FUSE-BPF Support" >> $DEFCONFIG
+          echo "CONFIG_FUSE_FS=y" >> $DEFCONFIG
+          echo "CONFIG_BPF_SYSCALL=y" >> $DEFCONFIG
+          echo "CONFIG_FUSE_BPF=y" >> $DEFCONFIG
+          
       - name: Setup NoMount
         shell: bash
         run: |
