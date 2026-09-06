@@ -135,7 +135,7 @@ jobs:
               "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
               | bash
 
-            # Stub fungsi legacy (Menghindari error heredoc dan indentasi YAML)
+            # Stub fungsi legacy untuk mencegah error link vmlinux
             if ! grep -rq "^int ksu_install_su_fd" drivers/kernelsu/feature/sucompat.c 2>/dev/null; then
               {
                 echo ""
@@ -161,19 +161,17 @@ jobs:
               -o static.patch
             patch -p2 -d "drivers/kernelsu" < static.patch || true
             rm -f static.patch
-          else
-            echo "[+] static.patch disabled for ReSukiSU."
           fi
 
-          # 2. Registrasi Aman ke Kconfig dan Makefile agar olddefconfig tidak "lupa" membaca KSU
+          # 2. Hapus depends on KPROBES agar tidak dibuang Kbuild
+          sed -i 's/depends on KPROBES//g' drivers/kernelsu/Kconfig 2>/dev/null || true
+
+          # 3. Registrasi Aman ke Kconfig dan Makefile root
           sed -i '/kernelsu/d' drivers/Kconfig
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
-
-          # Validasi
-          test -e drivers/kernelsu
 
       - name: Apply SUSFS Patches
         shell: bash
@@ -186,8 +184,54 @@ jobs:
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
-          patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
+          patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
+
+          # ---------------------------------------------------------
+          # MANUALLY INJECT SUSFS KCONFIG IF PATCH FAILED
+          # (Ini mencegah error "CONFIG_KSU_SUSFS tidak aktif" di Kbuild)
+          # ---------------------------------------------------------
+          if ! grep -q "KSU_SUSFS" fs/Kconfig; then
+            echo "[!] Menyuntikkan konfigurasi SuSFS ke fs/Kconfig secara manual..."
+            cat >> fs/Kconfig << 'EOF'
+
+          config KSU_SUSFS
+              bool "KSU SUSFS"
+              default y
+          config KSU_SUSFS_SUS_PATH
+              bool "SU Hide Path"
+              default y
+          config KSU_SUSFS_SUS_MOUNT
+              bool "SU Hide Mount"
+              default y
+          config KSU_SUSFS_SUS_KSTAT
+              bool "SU Hide Kstat"
+              default y
+          config KSU_SUSFS_SPOOF_UNAME
+              bool "SU Spoof Uname"
+              default y
+          config KSU_SUSFS_ENABLE_LOG
+              bool "SU SUSFS Log"
+              default y
+          config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+              bool "SU Hide Symbols"
+              default n
+          config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+              bool "SU Spoof Cmdline"
+              default y
+          config KSU_SUSFS_OPEN_REDIRECT
+              bool "SU Open Redirect"
+              default y
+          config KSU_SUSFS_SUS_MAP
+              bool "SU Sus Map"
+              default y
+          EOF
+          fi
+
+          if ! grep -q "susfs" fs/Makefile; then
+            echo "[!] Menyuntikkan Makefile SuSFS ke fs/Makefile secara manual..."
+            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o sus_export.o" >> fs/Makefile
+          fi
 
           # FIX (ReSukiSU only): Wire manual sel_handle_status_ops ke .open
           if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
@@ -196,8 +240,6 @@ jobs:
               perl -0pi -e 's/\t\.open\t\t= sel_open_handle_status,\n/#ifdef CONFIG_KSU_SUSFS\n\t.open\t\t= my_sel_open_handle_status,\n#else\n\t.open\t\t= sel_open_handle_status,\n#endif \/\/ #ifdef CONFIG_KSU_SUSFS\n/' security/selinux/selinuxfs.c
             fi
           fi
-
-          echo "[+] sys.c_fix.patch disabled."
 
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -269,8 +311,6 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
           cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
-          CONFIG_DEBUG_INFO=y
-          CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
           CONFIG_NOMOUNT=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
@@ -346,6 +386,7 @@ jobs:
           make O=out -j$(nproc --all) ${{ inputs.codename }}_defconfig
 
           # 2. Injeksi mutlak konfigurasi KSU dan Kprobes
+          # FITUR KPROBES SENGAJA DIHILANGKAN SESUAI SETELAN ORI SULTAN
           ./scripts/config --file out/.config \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
@@ -359,15 +400,9 @@ jobs:
             -d CONFIG_KSU_SUSFS_OPEN_REDIRECT \
             -e CONFIG_KSU_SUSFS_SUS_MAP \
             -e CONFIG_THREAD_INFO_IN_TASK \
-            -e CONFIG_KPROBES \
-            -e CONFIG_HAVE_KPROBES \
             -e CONFIG_KALLSYMS \
             -e CONFIG_KALLSYMS_ALL \
             -e CONFIG_OVERLAY_FS \
-            -e CONFIG_BPF_EVENTS \
-            -e CONFIG_KPROBE_EVENTS \
-            -e CONFIG_UPROBES \
-            -e CONFIG_UPROBE_EVENTS \
             -e CONFIG_FUSE_FS \
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
@@ -375,8 +410,16 @@ jobs:
           make O=out olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
           echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
-          if ! grep -q "^CONFIG_KSU=y" out/.config || ! grep -q "^CONFIG_KSU_SUSFS=y" out/.config; then
-            echo "::error::CONFIG_KSU atau CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
+          MISSING=0
+          if ! grep -q "^CONFIG_KSU=y" out/.config; then
+            echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
+            MISSING=1
+          fi
+          if ! grep -q "^CONFIG_KSU_SUSFS=y" out/.config; then
+            echo "::error::CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
+            MISSING=1
+          fi
+          if [ $MISSING -eq 1 ]; then
             grep -i "ksu" /tmp/olddefconfig.log || true
             exit 1
           fi
@@ -435,50 +478,4 @@ jobs:
             !${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload NoMount Metamodule Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}
-          path: |
-            ${{ github.workspace }}/NoMount-*.zip
-            ${{ github.workspace }}/NoMount-*.sha256
-
-      - name: Collect .rej files
-        if: ${{ always() }}
-        id: collect_rej
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          rm -rf rej
-          mkdir -p rej
-          found="false"
-          while IFS= read -r -d '' rej_file; do
-            found="true"
-            original_file="${rej_file%.rej}"
-            rej_rel="${rej_file#./}"
-            original_rel="${original_file#./}"
-            mkdir -p "rej/$(dirname "$rej_rel")"
-            cp -f "$rej_file" "rej/$rej_rel"
-            if [[ -f "$original_file" ]]; then
-              mkdir -p "rej/$(dirname "$original_rel")"
-              cp -f "$original_file" "rej/$original_rel"
-            fi
-          done < <(find . -type f -name '*.rej' -print0)
-          echo "found=$found" >> "$GITHUB_OUTPUT"
-
-      - name: Zip collected .rej bundle
-        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej
-
-      - name: Upload .rej bundle
-        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: rej-${{ inputs.codename }}-${{ matrix.variant }}
-          path: |
-            rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
-            
+        uses: actions/u
