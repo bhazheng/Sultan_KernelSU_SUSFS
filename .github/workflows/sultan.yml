@@ -83,18 +83,59 @@ jobs:
           cp ../kernel_patches_new/fix_open.patch ./
           patch -p1 < fix_open.patch
 
-      - name: Apply BBRv3 Patches
+      - name: Apply BBRv3 Patch (Android14-6.1)
         shell: bash
         run: |
           set -euo pipefail
-          echo "Applying BBRv3 patches..."
+          echo "Downloading and applying BBRv3 patch for 6.1..."
           cd "$CONFIG"
+          curl -fsSL --retry 5 https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch -o bbrv3_6.1.patch
+          patch -p1 < bbrv3_6.1.patch || true
+          echo "[+] BBRv3 6.1 patch applied successfully"
 
-          cp ../kernel_patches_new/0001-net-tcp-backport-BBRv3-to-android14-5.15.patch ./
+      - name: Apply General Performance, I/O and Log Cleanup Patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Applying Category 1 performance patches..."
+          cd "$CONFIG"
+          REPO_RAW="https://raw.githubusercontent.com/WildKernels/kernel_patches/main"
 
-          # Terapkan patch dengan fallback toleransi offset jika ada
-          patch -p1 < 0001-net-tcp-backport-BBRv3-to-android14-5.15.patch || true
-          echo "[+] BBRv3 patch applied"
+          # 1. Matikan Logspam CPU IRQ & System
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true
+
+          # 2. Optimasi Memori & Operasi AArch64
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true
+
+          # 3. Optimasi Latensi TCP & Socket Memory Packets
+          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true
+
+          # 4. Tweak I/O Storage F2FS
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true
+
+          echo "[+] Category 1 patches applied successfully"
+
+      - name: Apply Unicode Bypass Fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Downloading and applying Unicode fix for 6.1+..."
+          cd "$CONFIG"
+          curl -fsSL --retry 5 https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/unicode_bypass_fix_6.1%2B.patch -o unicode_fix.patch
+          patch -p1 --forward < unicode_fix.patch || true
+          echo "[+] Unicode fix applied"
+
+      - name: Remove Protected Exports (Allow Out-of-tree Modules)
+        shell: bash
+        run: |
+          cd "$CONFIG"
+          echo "Relaxing symbol exports for module compatibility..."
+          sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c 2>/dev/null || true
+          sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
         shell: bash
@@ -169,6 +210,11 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_THREAD_INFO_IN_TASK=y
+
+          # Kallsyms & OverlayFS
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
+          CONFIG_OVERLAY_FS=y
 
           # NoMount & Mountify
           CONFIG_NOMOUNT=y
