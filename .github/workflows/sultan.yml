@@ -82,24 +82,6 @@ jobs:
           git clone --depth=1 https://gitlab.com/pershoot/susfs4ksu.git -b "gki-android14-6.1" &
           wait
 
-      - name: Apply SUSFS Patches (Pre-Root)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$CONFIG"
-          
-          # SuSFS Common
-          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
-
-          # Terapkan patch SuSFS *SEBELUM* setup.sh dijalankan. 
-          # Ini mencegah Hunk #3 FAILED di selinuxfs.c karena file belum dimodifikasi oleh ReSukiSU.
-          perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
-          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch
-          perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
-          
-          patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
-
       - name: Add Root Implementation
         shell: bash
         run: |
@@ -125,6 +107,33 @@ jobs:
           sed -i '/[Kk]ernelSU/d' drivers/Makefile
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
+
+      - name: Apply SUSFS Patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          # Patch Koeksistensi untuk KernelSU-Next
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            echo "[+] Applying Pershoot Coexistence Patches to SuSFS..."
+            cd susfs4ksu
+            curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/pershoot/susfs4ksu/0001-pershoot-Allow-core-to-be-built-with-no-features.patch" | patch -p1 || true
+            curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/pershoot/susfs4ksu/0002-pershoot-Implement-SuSFS-and-Toolkit-coexistence.patch" | patch -p1 || true
+            cd ../
+          fi
+          
+          cd "$CONFIG"
+          
+          # SuSFS Common
+          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
+          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
+
+          # Terapkan patch SuSFS (Abaikan reject selinuxfs.c dengan || true)
+          perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
+          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
+          
+          patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
 
       - name: Apply Optimization & Network Patches
         shell: bash
