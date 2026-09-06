@@ -81,12 +81,12 @@ jobs:
           ANYKERNEL_BRANCH="sultan-${{ inputs.codename }}"
           echo "Using branch for AnyKernel3: $ANYKERNEL_BRANCH"
 
-          git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
-          git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
-          git clone https://github.com/bhazheng/android_kernel_google_tensynos
+          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
+          git clone --depth=1 https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
+          git clone --depth=1 https://github.com/bhazheng/android_kernel_google_tensynos
           SUSFS_BRANCH="gki-android14-6.1"
           echo "Using branch for SUSFS: $SUSFS_BRANCH"
-          git clone https://gitlab.com/pershoot/susfs4ksu.git -b "$SUSFS_BRANCH"
+          git clone --depth=1 https://gitlab.com/pershoot/susfs4ksu.git -b "$SUSFS_BRANCH"
 
       - name: Add Root Implementation (Matrix Conditional)
         run: |
@@ -100,9 +100,22 @@ jobs:
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             echo "[+] Adding ReSukiSU..."
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+
+            # Fix static export check ReSukiSU
+            if ! grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null; then
+              echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
+            fi
           fi
 
-          grep -q "KernelSU" drivers/Makefile || echo "obj-y += KernelSU/" >> drivers/Makefile
+          # Buat fallback symlink ganda agar kedua penamaan case-sensitive aman
+          if [ -d "KernelSU" ] || [ -L "KernelSU" ]; then
+            ln -sf ../KernelSU drivers/kernelsu
+            ln -sf ../KernelSU drivers/KernelSU
+          fi
+
+          sed -i '/KernelSU/d' drivers/Makefile
+          sed -i '/kernelsu/d' drivers/Makefile
+          echo "obj-y += kernelsu/" >> drivers/Makefile
 
       - name: Apply SUSFS Patches
         run: |
@@ -121,9 +134,6 @@ jobs:
           echo "Applying fix patches from bhazheng repo..."
           cp ../kernel_patches_new/sys.c_fix.patch ./
           patch -p1 < sys.c_fix.patch || true
-
-          # cp ../kernel_patches_new/fix_open.patch ./
-          # patch -p1 < fix_open.patch || true
 
       - name: Apply BBRv3 Patch (Android14-6.1)
         shell: bash
@@ -144,20 +154,20 @@ jobs:
           REPO_RAW="https://raw.githubusercontent.com/WildKernels/kernel_patches/main"
 
           # 1. Matikan Logspam CPU IRQ & System
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true[cite: 1]
 
           # 2. Optimasi Memori & Operasi AArch64
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true[cite: 1]
 
           # 3. Optimasi Latensi TCP & Socket Memory Packets
-          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true[cite: 1]
 
           # 4. Tweak I/O Storage F2FS
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true[cite: 1]
 
           echo "[+] Category 1 patches applied successfully"
 
@@ -313,6 +323,11 @@ jobs:
           CONFIG_ARCH_SUPPORTS_THINLTO=y
           CONFIG_LTO_NONE=n
 
+          # Disable Heavy Debug Info
+          CONFIG_DEBUG_INFO=n
+          CONFIG_DEBUG_INFO_NONE=y
+          CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=n
+
           # Dependensi Wajib KernelSU
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
@@ -404,37 +419,59 @@ jobs:
           
           mkdir -p out
 
-          # Export variabel compiler secara konsisten ke sub-make
-          export PATH="$CLANG_PATH:$PATH"
+          # 1. Setup wrapper ccache yang bersih (tanpa merusak cc-version.sh)
+          mkdir -p "$GITHUB_WORKSPACE/ccache-bin"
+          ln -sf "$(which ccache)" "$GITHUB_WORKSPACE/ccache-bin/clang"
+          ln -sf "$(which ccache)" "$GITHUB_WORKSPACE/ccache-bin/clang++"
+
+          # 2. Export PATH: wrapper ccache -> AOSP Clang -> system PATH
+          export PATH="$GITHUB_WORKSPACE/ccache-bin:$CLANG_PATH:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
-          export CC="ccache clang"
           export LLVM=1
           export LLVM_IAS=1
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
-          export KCFLAGS="-O3"
-          export KCPPFLAGS="-O3"
 
-          # Cegah clock skew / loop timestamp pada berkas defconfig
-          touch arch/arm64/configs/${{ inputs.codename }}_defconfig
-
+          ccache -M 15G
           ccache -s
 
-          # 1. Buat defconfig
-          make O=out -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          touch arch/arm64/configs/${{ inputs.codename }}_defconfig
 
-          # 2. Sinkronkan dependensi konfigurasi untuk menghentikan infinite loop SYNC auto.conf.cmd
-          make O=out syncconfig
+          # 3. Buat base defconfig
+          make O=out -j$(nproc --all) CC=clang ${{ inputs.codename }}_defconfig
 
-          # Verifikasi konfigurasi KSU di berkas aktif
+          # 4. Suntikkan opsi KSU dan Kprobes langsung ke file .config
+          echo "[+] Menyuntikkan konfigurasi KSU dan Kprobes..."
+          ./scripts/config --file out/.config \
+            -e CONFIG_KSU \
+            -e CONFIG_KSU_SUSFS \
+            -e CONFIG_KSU_SUSFS_SUS_PATH \
+            -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+            -e CONFIG_KSU_SUSFS_SUS_KSTAT \
+            -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+            -e CONFIG_KSU_SUSFS_ENABLE_LOG \
+            -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            -d CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+            -e CONFIG_KSU_SUSFS_SUS_MAP \
+            -e CONFIG_KPROBES \
+            -e CONFIG_HAVE_KPROBES \
+            -e CONFIG_KALLSYMS \
+            -e CONFIG_KALLSYMS_ALL \
+            -e CONFIG_OVERLAY_FS \
+            -e CONFIG_NOMOUNT
+
+          # 5. Kunci config (olddefconfig)
+          make O=out CC=clang olddefconfig
+
           echo "=== Verifikasi Status Config KSU ==="
           grep -E "CONFIG_KSU|CONFIG_KALLSYMS|CONFIG_KPROBES" out/.config || true
 
-          # 3. Kompilasi kernel (paralel dengan fallback single-thread jika gagal)
-          make O=out LOCALVERSION_AUTO=0 -j$(nproc --all) || {
-            echo "::error::Build paralel Clang gagal. Menjalankan single-thread untuk melacak baris eror:"
-            make O=out LOCALVERSION_AUTO=0 -j1
+          # 6. Kompilasi kernel
+          make O=out CC=clang LOCALVERSION_AUTO=0 -j$(nproc --all) || {
+            echo "::error::Build paralel gagal. Menjalankan single-thread untuk melacak eror:"
+            make O=out CC=clang LOCALVERSION_AUTO=0 -j1
             exit 1
           }
 
