@@ -44,7 +44,7 @@ jobs:
       - name: Setup CCache Cache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.ccache
+          path: ${{ github.workspace }}.ccache
           key: ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
           restore-keys: |
             ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-
@@ -82,22 +82,61 @@ jobs:
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" &
           wait
 
-      - name: Add Root Implementation
+      - name: Add Root Implementation & Version Anchoring
         shell: bash
         run: |
           set -euo pipefail
           cd "$CONFIG"
           rm -rf KernelSU drivers/kernelsu drivers/KernelSU
 
+          # Fungsi retry untuk mengantisipasi gangguan jaringan pada Runner
+          retry() {
+            local n=0
+            until [ "$n" -ge 5 ]; do
+              "$@" && return 0
+              n=$((n+1))
+              echo "retry $n/5 failed for: $*" >&2
+              sleep 5
+            done
+            return 1
+          }
+
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+            KSU_REPO="https://github.com/pershoot/KernelSU-Next.git"
+            KSU_INPUT="dev-susfs"
+
+            if retry git ls-remote --heads "$KSU_REPO" "$KSU_INPUT" | grep -q .; then
+              curl -LSs --retry 5 --retry-delay 5 --retry-all-errors "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+              retry git -C KernelSU/kernel fetch --depth=50 origin "$KSU_INPUT"
+              git -C KernelSU/kernel checkout "origin/$KSU_INPUT"
+            else
+              curl -LSs --retry 5 --retry-delay 5 --retry-all-errors "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+              retry git -C KernelSU/kernel fetch --depth=50 origin "$KSU_INPUT"
+              git -C KernelSU/kernel checkout "$KSU_INPUT"
+            fi
+
+            # Penambatan versi presisi ala action.yml agar sinkron dengan Manager[cite: 1]
+            cd KernelSU/kernel
+            BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD | sed 's:-.*::' 2>/dev/null)
+            BASE_COMMIT=$(git merge-base HEAD refs/remotes/origin/$BASE_BRANCH 2>/dev/null || git merge-base HEAD refs/remotes/origin/main 2>/dev/null || echo HEAD)
+            COMMITS_COUNT=$(/usr/bin/git rev-list --count $BASE_COMMIT)
+            BASE_VERSION=30000
+            KSU_VERSION=$(expr $COMMITS_COUNT "+" $BASE_VERSION)
+            sed -i "s/^KSU_VERSION_FALLBACK := 1$/KSU_VERSION_FALLBACK := ${KSU_VERSION}/" Kbuild
+
+            KSU_GIT_TAG="$(git describe --tags --abbrev=0 $BASE_COMMIT 2>/dev/null || echo "v0.0.1")"
+            sed -i "s/^KSU_VERSION_TAG_FALLBACK := v0.0.1$/KSU_VERSION_TAG_FALLBACK := ${KSU_GIT_TAG}/" Kbuild
+            cd ../../
+
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-            
-            # Hapus sifat 'static' agar simbol dapat diekspor untuk static_export_check
-            sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c
-            grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
           fi
+
+          # Terapkan static.patch ke SEMUA varian root
+          echo "[+] Downloading and applying static.patch universally..."
+          curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/refs/heads/main/.github/actions/kernelsu/patches/static.patch" -o static.patch
+          patch -p1 < static.patch || true
+          rm -f static.patch
 
           if [ -d "KernelSU/kernel" ]; then
             ln -sfn ../KernelSU/kernel drivers/kernelsu
@@ -114,7 +153,7 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
           
-          # SuSFS Common (Patch koeksistensi Pershoot telah dihapus sepenuhnya)
+          # SuSFS Common (menggunakan branch minimal khusus tensor/shiba)
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
