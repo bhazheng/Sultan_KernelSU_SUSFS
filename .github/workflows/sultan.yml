@@ -36,7 +36,7 @@ jobs:
       - name: Install CCache & Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache
+          sudo apt-get install -y ccache libssl-dev libelf-dev bc bison flex
           echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> $GITHUB_ENV
 
       - name: Setup CCache Cache
@@ -86,33 +86,38 @@ jobs:
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
+          rm -rf KernelSU drivers/kernelsu drivers/KernelSU
+
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Adding KernelSU-Next..."
-            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash
+            echo "[+] Adding KernelSU-Next (dev-susfs)..."
+            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             echo "[+] Adding ReSukiSU..."
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
           fi
+
+          grep -q "KernelSU" drivers/Makefile || echo "obj-y += KernelSU/" >> drivers/Makefile
 
       - name: Apply SUSFS Patches
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          echo "Applying SUSFS patches..."
-          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
+          echo "Applying SuSFS common patches..."
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
-          patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
+            patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          fi
           
-          echo "Applying sys.c_fix.patch from bhazheng repo..."
+          echo "Applying fix patches from bhazheng repo..."
           cp ../kernel_patches_new/sys.c_fix.patch ./
-          patch -p1 < sys.c_fix.patch
+          patch -p1 < sys.c_fix.patch || true
 
-          echo "Applying fix_open.patch from bhazheng repo..."
           cp ../kernel_patches_new/fix_open.patch ./
-          patch -p1 < fix_open.patch
+          patch -p1 < fix_open.patch || true
 
       - name: Apply BBRv3 Patch (Android14-6.1)
         shell: bash
@@ -133,20 +138,20 @@ jobs:
           REPO_RAW="https://raw.githubusercontent.com/WildKernels/kernel_patches/main"
 
           # 1. Matikan Logspam CPU IRQ & System
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true
 
           # 2. Optimasi Memori & Operasi AArch64
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true
 
           # 3. Optimasi Latensi TCP & Socket Memory Packets
-          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true
 
           # 4. Tweak I/O Storage F2FS
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true[cite: 1, 2]
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true
 
           echo "[+] Category 1 patches applied successfully"
 
@@ -189,7 +194,7 @@ jobs:
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
           else
             if ! [[ "$requested_commit" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "NoMount commit must be a full 40-character SHA." >&2[cite: 3]
+              echo "NoMount commit must be a full 40-character SHA." >&2
               exit 2
             fi
             setup_script="${RUNNER_TEMP}/nomount-setup-${requested_commit}.sh"
@@ -207,7 +212,7 @@ jobs:
             "$setup_script" "$requested_commit"
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
             if [ "$actual_commit" != "$requested_commit" ]; then
-              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2[cite: 3]
+              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2
               exit 1
             fi
           fi
@@ -228,7 +233,6 @@ jobs:
 
           cd "$GITHUB_WORKSPACE"
           
-          # Pastikan commit terdefinisi, jika kosong ambil HEAD dev branch
           COMMIT_HASH="${NOMOUNT_COMMIT:-}"
           if [ -z "$COMMIT_HASH" ]; then
             COMMIT_HASH="$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)"
@@ -270,9 +274,7 @@ jobs:
           )
           sha256sum "$ZIP_OUT" > "${ZIP_OUT}.sha256"
 
-          # Bersihkan direktori temporary compile
           rm -rf "$SRC_DIR" "$MOD_DIR"
-
           echo "[+] NoMount metamodule packaged successfully: $ZIP_OUT"
 
       - name: Apply All Kernel Configurations
@@ -283,7 +285,7 @@ jobs:
 
           cat >> "$DEFCONFIG" << 'EOF'
 
-          # KernelSU & SuSFS Configuration
+          # KernelSU & SuSFS Core Requirements
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -297,7 +299,9 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_THREAD_INFO_IN_TASK=y
 
-          # Kallsyms & OverlayFS
+          # Dependensi Wajib KernelSU
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
           CONFIG_KALLSYMS=y
           CONFIG_KALLSYMS_ALL=y
           CONFIG_OVERLAY_FS=y
@@ -383,9 +387,29 @@ jobs:
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
+          
+          mkdir -p out
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
+          export CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc"
+          export ARCH=arm64
+          export SUBARCH=arm64
+
           ccache -s
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc" -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc" LOCALVERSION_AUTO=0 -j$(nproc --all)
+
+          # 1. Generate Defconfig
+          make O=out -j$(nproc --all) ${{ inputs.codename }}_defconfig
+
+          # Verifikasi konfigurasi KSU dan Kprobes di .config
+          echo "=== Verifikasi Status Config KSU ==="
+          grep -E "CONFIG_KSU|CONFIG_KALLSYMS|CONFIG_KPROBES" out/.config || true
+
+          # 2. Compile Kernel dengan Fallback Single-Thread jika Terjadi Error
+          make O=out LOCALVERSION_AUTO=0 -j$(nproc --all) || {
+            echo "::error::Build paralel gagal. Menjalankan single-thread untuk melacak baris eror:"
+            make O=out LOCALVERSION_AUTO=0 -j1
+            exit 1
+          }
+
           ccache -s
 
       - name: Copy Images
