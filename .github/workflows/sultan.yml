@@ -56,7 +56,6 @@ jobs:
           set -euo pipefail
           echo "Streaming and extracting GCC 14.2.0..."
           curl -fsSL "https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz" | tar -xz
-          echo "[+] GCC 14.2.0 toolchain ready"
 
       - name: Set up Zig Compiler
         uses: jetsung/setup-zig@v0.0.4
@@ -68,23 +67,19 @@ jobs:
         run: |
           CONFIG="android_kernel_google_tensynos"
           echo "CONFIG=$CONFIG" >> "$GITHUB_ENV"
-          echo "CONFIG set to: $CONFIG"
 
       - name: Clone AnyKernel3 and Dependencies (Parallel)
         shell: bash
         run: |
           set -euo pipefail
-          ANYKERNEL_BRANCH="sultan-${{ inputs.codename }}"
           echo "[+] Cloning dependencies in parallel..."
-
-          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH" &
+          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" &
           git clone --depth=1 https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new &
           git clone --depth=1 https://github.com/bhazheng/android_kernel_google_tensynos &
           git clone --depth=1 https://gitlab.com/pershoot/susfs4ksu.git -b "gki-android14-6.1" &
           wait
-          echo "[+] All dependencies cloned successfully"
 
-      - name: Add Root Implementation (Matrix Conditional)
+      - name: Add Root Implementation
         shell: bash
         run: |
           set -euo pipefail
@@ -92,97 +87,58 @@ jobs:
           rm -rf KernelSU drivers/kernelsu drivers/KernelSU
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Integrating KernelSU-Next (dev-susfs)..."
             curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
-            echo "[+] Integrating ReSukiSU..."
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-
-            # Hapus keyword static agar EXPORT_SYMBOL valid saat linking GCC
+            # Fix static export check ReSukiSU
             sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c
-            if ! grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null; then
-              echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
-            fi
+            grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
           fi
 
-          # Sambungkan symlink secara presisi ke subfolder KernelSU/kernel
-          if [ -d "KernelSU/kernel" ]; then
-            ln -sfn ../KernelSU/kernel drivers/kernelsu
-            ln -sfn ../KernelSU/kernel drivers/KernelSU
-          fi
-
-          sed -i '/KernelSU/d' drivers/Makefile
-          sed -i '/kernelsu/d' drivers/Makefile
+          # Linker Kbuild yang presisi
+          [ -d "KernelSU/kernel" ] && ln -sfn ../KernelSU/kernel drivers/kernelsu
+          sed -i '/[Kk]ernelSU/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Apply SUSFS Patches (Adopted from Sultan-Ori)
+      - name: Apply SUSFS & Optimization Patches
         shell: bash
         run: |
           set -euo pipefail
           cd "$CONFIG"
-          echo "Copying SuSFS common patches..."
+          
+          # SuSFS Common
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
+          # Trik Perl dari sultanori + Patching
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            # Trik Perl dari sultanori: netralkan hook libperfmgr_redirect sementara
             perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
-            
-            # Terapkan patch utama SuSFS GKI
             patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
-            
-            # Kembalikan hook libperfmgr_redirect bersamaan dengan hook SuSFS
             perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
           fi
           
           patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
 
-      - name: Apply BBRv3 Patch (Android14-6.1)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$CONFIG"
-          curl -fsSL --retry 3 https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch | patch -p1 || true
-          echo "[+] BBRv3 applied"
+          # Apply BBRv3, Unicode, & Performance Patches with Array Loop (Cleaner YAML)
+          REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
+          PATCHES=(
+            "bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
+            "unicode_bypass_fix_6.1%2B.patch"
+            "silence_system_logspam.patch"
+            "silence_irq_cpu_logspam.patch"
+            "optimise_memcmp.patch"
+            "optimized_mem_operations.patch"
+            "force_tcp_nodelay.patch"
+            "increase_sk_mem_packets.patch"
+            "f2fs_reduce_congestion.patch"
+            "f2fs_enlarge_min_fsync_blocks.patch"
+          )
+          for p in "${PATCHES[@]}"; do
+            curl -fsSL --retry 3 "$REPO/$p" | patch -p1 --forward || true
+          done
 
-      - name: Apply General Performance, I/O and Log Cleanup Patches
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$CONFIG"
-          REPO_RAW="https://raw.githubusercontent.com/WildKernels/kernel_patches/main"
-
-          # 1. Nonaktifkan Logspam System & IRQ
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true
-
-          # 2. Optimasi Memori AArch64
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true
-
-          # 3. Optimasi Latensi Jaringan TCP
-          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true
-
-          # 4. F2FS I/O Optimization
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true
-
-          echo "[+] Performance patches applied"
-
-      - name: Apply Unicode Bypass Fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$CONFIG"
-          curl -fsSL --retry 3 https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/unicode_bypass_fix_6.1%2B.patch | patch -p1 --forward || true
-
-      - name: Remove Protected Exports (Allow Out-of-tree Modules)
-        shell: bash
-        run: |
-          cd "$CONFIG"
-          sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c 2>/dev/null || true
-          sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module/main.c 2>/dev/null || true
+          # Remove protected exports
+          sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
         shell: bash
@@ -190,110 +146,53 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
           KERNEL_DIR="$(pwd)"
-
           curl -fsSL --retry 3 https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s dev
           actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
-
-          if [ ! -L "$KERNEL_DIR/fs/nomount" ]; then
-            echo "::error::NoMount integration failed: fs/nomount symlink missing"
-            exit 1
-          fi
-
+          [ ! -L "$KERNEL_DIR/fs/nomount" ] && exit 1
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
-          echo "[+] NoMount integrated (commit: $actual_commit)"
 
       - name: Build and Package NoMount Metamodule
         shell: bash
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          COMMIT_HASH="${NOMOUNT_COMMIT:-}"
-          if [ -z "$COMMIT_HASH" ]; then
-            COMMIT_HASH="$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)"
-          fi
+          COMMIT_HASH="${NOMOUNT_COMMIT:-$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)}"
+          SRC_DIR="nomount_src"
+          MOD_DIR="nomount_mod"
+          ZIP_OUT="NoMount-${COMMIT_HASH}.zip"
 
-          SRC_DIR="$GITHUB_WORKSPACE/nomount_src"
-          MOD_DIR="$GITHUB_WORKSPACE/nomount_mod"
-          ZIP_OUT="$GITHUB_WORKSPACE/NoMount-${COMMIT_HASH}.zip"
-
-          rm -rf "$SRC_DIR" "$MOD_DIR"
-          mkdir -p "$SRC_DIR" "$MOD_DIR"
-
+          mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin"
           git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
           git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
 
-          mkdir -p "$SRC_DIR/bin"
           (
             cd "$SRC_DIR/userspace/src"
-            zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib \
-              -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
-              -Wl,--entry=_start nm.c -o ../../bin/nm-arm64
-            zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding \
-              -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
-              -ffunction-sections -fdata-sections -Wl,--gc-sections \
-              -Wl,--entry=_start nm.c -o ../../bin/nm-arm
+            zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -Wl,--entry=_start nm.c -o ../../bin/nm-arm64
+            zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--entry=_start nm.c -o ../../bin/nm-arm
           )
 
           cp -a "$SRC_DIR/module/." "$MOD_DIR/"
-          mkdir -p "$MOD_DIR/bin"
           install -m 0755 "$SRC_DIR/bin/nm-arm64" "$MOD_DIR/bin/nm-arm64"
           install -m 0755 "$SRC_DIR/bin/nm-arm" "$MOD_DIR/bin/nm-arm"
           sed -i "s/^versionCode=.*/versionCode=1/" "$MOD_DIR/module.prop"
           printf '%s\n' "$COMMIT_HASH" > "$MOD_DIR/NOMOUNT_SOURCE_COMMIT"
 
-          (
-            cd "$MOD_DIR"
-            zip -qr "$ZIP_OUT" ./*
-          )
+          (cd "$MOD_DIR" && zip -qr "../$ZIP_OUT" ./*)
           sha256sum "$ZIP_OUT" > "${ZIP_OUT}.sha256"
-
           rm -rf "$SRC_DIR" "$MOD_DIR"
-          echo "[+] Metamodule packaged: $ZIP_OUT"
 
       - name: Apply Kernel Defconfig Flags
         shell: bash
         run: |
           cd "$CONFIG"
-          DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
-
-          cat >> "$DEFCONFIG" << 'EOF'
-
-          # KernelSU & SuSFS
-          CONFIG_KSU=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=n
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          CONFIG_THREAD_INFO_IN_TASK=y
-
-          # Dependensi Wajib KernelSU
-          CONFIG_KPROBES=y
-          CONFIG_HAVE_KPROBES=y
-          CONFIG_KALLSYMS=y
-          CONFIG_KALLSYMS_ALL=y
-          CONFIG_OVERLAY_FS=y
-
-          # NoMount & Mountify
+          # Kita hanya inject Networking, BBR, CIFS, & Debug di sini.
+          # KSU dan kprobes diurus mutlak oleh scripts/config nanti.
+          cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
+          CONFIG_DEBUG_INFO=y
+          CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
           CONFIG_NOMOUNT=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
-
-          # eBPF & FUSE-BPF
-          CONFIG_BPF_EVENTS=y
-          CONFIG_KPROBE_EVENTS=y
-          CONFIG_UPROBES=y
-          CONFIG_UPROBE_EVENTS=y
-          CONFIG_FUSE_FS=y
-          CONFIG_BPF_SYSCALL=y
-          CONFIG_FUSE_BPF=y
-
-          # Networking, TTL/HL, IPSET & IPv6 NAT
           CONFIG_IP_NF_TARGET_TTL=y
           CONFIG_IP6_NF_TARGET_HL=y
           CONFIG_IP6_NF_MATCH_HL=y
@@ -322,8 +221,6 @@ jobs:
           CONFIG_NETFILTER_XT_MATCH_RECENT=y
           CONFIG_IP6_NF_NAT=y
           CONFIG_IP6_NF_TARGET_MASQUERADE=y
-
-          # TCP Congestion Control (BBRv3) & Queueing Disciplines
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_TCP_CONG_BBR3=y
@@ -336,8 +233,6 @@ jobs:
           CONFIG_NET_SCH_FQ=y
           CONFIG_NET_SCH_FQ_CODEL=y
           CONFIG_NET_SCH_CAKE=y
-
-          # CIFS / SMB Network Filesystem
           CONFIG_NETWORK_FILESYSTEMS=y
           CONFIG_NETFS_SUPPORT=y
           CONFIG_KEYS=y
@@ -346,10 +241,6 @@ jobs:
           CONFIG_CIFS_POSIX=y
           EOF
 
-      - name: Clean Kernel Flags & Branding
-        shell: bash
-        run: |
-          cd "$CONFIG"
           sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
           sed -i '/echo "+"$/d' scripts/setlocalversion
@@ -367,20 +258,16 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
 
-          # CCache Optimization
           export CCACHE_NOHASHDIR=true
           export CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,locale
-          ccache -M 15G
-          ccache -o compression=true
-          ccache -o compression_level=1
-          ccache -s
+          ccache -M 15G && ccache -o compression=true && ccache -o compression_level=1 && ccache -s
 
           touch arch/arm64/configs/${{ inputs.codename }}_defconfig
 
           # 1. Defconfig dasar
           make O=out -j$(nproc --all) ${{ inputs.codename }}_defconfig
 
-          # 2. Injeksi & kunci konfigurasi penting
+          # 2. Injeksi & kunci KSU secara mutlak menggunakan script
           ./scripts/config --file out/.config \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
@@ -393,19 +280,23 @@ jobs:
             -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
             -d CONFIG_KSU_SUSFS_OPEN_REDIRECT \
             -e CONFIG_KSU_SUSFS_SUS_MAP \
+            -e CONFIG_THREAD_INFO_IN_TASK \
             -e CONFIG_KPROBES \
             -e CONFIG_HAVE_KPROBES \
             -e CONFIG_KALLSYMS \
             -e CONFIG_KALLSYMS_ALL \
             -e CONFIG_OVERLAY_FS \
-            -e CONFIG_NOMOUNT
+            -e CONFIG_BPF_EVENTS \
+            -e CONFIG_KPROBE_EVENTS \
+            -e CONFIG_UPROBES \
+            -e CONFIG_UPROBE_EVENTS \
+            -e CONFIG_FUSE_FS \
+            -e CONFIG_BPF_SYSCALL \
+            -e CONFIG_FUSE_BPF
 
           make O=out olddefconfig
 
-          echo "=== Verifikasi Nilai Config KSU ==="
-          grep -E "CONFIG_KSU|CONFIG_KALLSYMS|CONFIG_KPROBES" out/.config || true
-
-          # 3. Kompilasi Paralel dengan Fallback Single-Thread
+          # 3. Kompilasi Paralel
           make O=out LOCALVERSION_AUTO=0 -j$(nproc --all) || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
             make O=out LOCALVERSION_AUTO=0 -j1
@@ -414,27 +305,25 @@ jobs:
 
           ccache -s
 
-      - name: Copy Images
+      - name: Copy Images & Create ZIP
         shell: bash
         run: |
           set -euo pipefail
           cd "$CONFIG"
           cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
+          
+          # Catatan: sultanori.yml mematikan dtb concatenation. Jika butuh DTB, uncomment if statement di bawah.
           if [ "${{ inputs.codename }}" == "gs201" ]; then
-            cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb
+             cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb
           elif [ "${{ inputs.codename }}" == "zuma" ]; then
-            cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb
+             cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb
           elif [ "${{ inputs.codename }}" == "zumapro" ]; then
-            cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
+             cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
           fi
 
-      - name: Create ZIP and Checksum
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd AnyKernel3
+          cd ../AnyKernel3
           ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan.zip"
-          zip -r "../$ZIP_NAME" ./*
+          zip -qr "../$ZIP_NAME" ./*
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
 
@@ -450,9 +339,6 @@ jobs:
           | Komponen | Status / Nilai |
           |---|---|
           | **Variant** | `${{ matrix.variant }}` |
-          | **Codename** | `${{ inputs.codename }}` |
-          | **Kernel Version** | `${{ inputs.kernel_version }}` (A${{ inputs.android_version }}) |
-          | **NoMount Commit** | `${{ env.NOMOUNT_COMMIT }}` |
           | **Artifact Name** | `${{ env.ZIP_NAME }}` |
           | **SHA-256** | \`${{ env.ZIP_SHA }}\` |
           EOF
@@ -474,47 +360,3 @@ jobs:
           path: |
             ${{ github.workspace }}/NoMount-*.zip
             ${{ github.workspace }}/NoMount-*.sha256
-
-      - name: Collect .rej files
-        if: ${{ always() }}
-        id: collect_rej
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          rm -rf rej
-          mkdir -p rej
-
-          found="false"
-          while IFS= read -r -d '' rej_file; do
-            found="true"
-            original_file="${rej_file%.rej}"
-            rej_rel="${rej_file#./}"
-            original_rel="${original_file#./}"
-
-            mkdir -p "rej/$(dirname "$rej_rel")"
-            cp -f "$rej_file" "rej/$rej_rel"
-
-            if [[ -f "$original_file" ]]; then
-              mkdir -p "rej/$(dirname "$original_rel")"
-              cp -f "$original_file" "rej/$original_rel"
-            fi
-          done < <(find . -type f -name '*.rej' -print0)
-
-          echo "found=$found" >> "$GITHUB_OUTPUT"
-
-      - name: Zip collected .rej bundle
-        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej
-
-      - name: Upload .rej bundle
-        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: rej-${{ inputs.codename }}-${{ matrix.variant }}
-          path: |
-            rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
