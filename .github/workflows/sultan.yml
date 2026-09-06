@@ -112,19 +112,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          
-          # Patch Koeksistensi untuk KernelSU-Next
-          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Applying Pershoot Coexistence Patches to SuSFS..."
-            cd susfs4ksu
-            curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/pershoot/susfs4ksu/0001-pershoot-Allow-core-to-be-built-with-no-features.patch" | patch -p1 || true
-            curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/pershoot/susfs4ksu/0002-pershoot-Implement-SuSFS-and-Toolkit-coexistence.patch" | patch -p1 || true
-            cd ../
-          fi
-          
           cd "$CONFIG"
           
-          # SuSFS Common
+          # SuSFS Common (Patch koeksistensi Pershoot telah dihapus sepenuhnya)
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
