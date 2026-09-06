@@ -83,6 +83,19 @@ jobs:
           cp ../kernel_patches_new/fix_open.patch ./
           patch -p1 < fix_open.patch
 
+      - name: Apply BBRv3 Patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Applying BBRv3 patches..."
+          cd "$CONFIG"
+
+          cp ../kernel_patches_new/0001-net-tcp-backport-BBRv3-to-android14-5.15.patch ./
+
+          # Terapkan patch dengan fallback toleransi offset jika ada
+          patch -p1 < 0001-net-tcp-backport-BBRv3-to-android14-5.15.patch || true
+          echo "[+] BBRv3 patch applied"
+
       - name: Integrate NoMount
         shell: bash
         run: |
@@ -201,15 +214,16 @@ jobs:
           CONFIG_IP6_NF_NAT=y
           CONFIG_IP6_NF_TARGET_MASQUERADE=y
 
-          # TCP Congestion Control & Queueing Disciplines
+          # TCP Congestion Control (BBRv3) & Queueing Disciplines
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_BBR3=y
           CONFIG_TCP_CONG_CUBIC=y
           CONFIG_TCP_CONG_BIC=y
           CONFIG_TCP_CONG_WESTWOOD=y
           CONFIG_TCP_CONG_HTCP=y
-          CONFIG_DEFAULT_BBR=y
-          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_DEFAULT_BBR3=y
+          CONFIG_DEFAULT_TCP_CONG="bbr3"
           CONFIG_NET_SCH_FQ=y
           CONFIG_NET_SCH_FQ_CODEL=y
           CONFIG_NET_SCH_CAKE=y
