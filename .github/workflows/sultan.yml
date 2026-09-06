@@ -36,7 +36,7 @@ jobs:
       - name: Install CCache & Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache
+          sudo apt-get install -y ccache libssl-dev libelf-dev bc bison flex
           echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> $GITHUB_ENV
 
       - name: Setup CCache Cache
@@ -48,15 +48,15 @@ jobs:
             ccache-${{ inputs.codename }}-${{ matrix.variant }}-
             ccache-${{ inputs.codename }}-
 
-      - name: Download and extract GCC 14.2.0 toolchain
+      - name: Download and extract AOSP Clang r510019
         run: |
-          echo "Downloading GCC 14.2.0 cross-compiler toolchain..."
-          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
-          echo "Extracting .gz file..."
-          gunzip x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
-          echo "Extracting .tar file..."
-          tar -xf x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar
-          echo "GCC 14.2.0 toolchain extracted successfully"
+          echo "Downloading AOSP Clang r510019 toolchain..."
+          mkdir -p "$GITHUB_WORKSPACE/clang-aosp"
+          curl -fsSL https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510019.tar.gz -o clang-r510019.tar.gz
+          tar -zxf clang-r510019.tar.gz -C "$GITHUB_WORKSPACE/clang-aosp"
+          rm -f clang-r510019.tar.gz
+          echo "CLANG_PATH=$GITHUB_WORKSPACE/clang-aosp/bin" >> $GITHUB_ENV
+          echo "[+] AOSP Clang r510019 extracted successfully"
 
       - name: Set up Zig Compiler
         uses: jetsung/setup-zig@v0.0.4
@@ -281,6 +281,14 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_THREAD_INFO_IN_TASK=y
 
+          # Compiler Optimizations & ThinLTO
+          CONFIG_LTO=y
+          CONFIG_LTO_CLANG=y
+          CONFIG_THINLTO=y
+          CONFIG_ARCH_SUPPORTS_LTO_CLANG=y
+          CONFIG_ARCH_SUPPORTS_THINLTO=y
+          CONFIG_LTO_NONE=n
+
           # Kallsyms & OverlayFS
           CONFIG_KALLSYMS=y
           CONFIG_KALLSYMS_ALL=y
@@ -363,13 +371,41 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-      - name: Build the Kernel
+      - name: Build the Kernel with AOSP Clang r510019 (ThinLTO)
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
+          
+          export PATH="$CLANG_PATH:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+
           ccache -s
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc" -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc" LOCALVERSION_AUTO=0 -j$(nproc --all)
+
+          # Generate Defconfig
+          make -j$(nproc --all) \
+            O=out \
+            ARCH=arm64 \
+            CC="ccache clang" \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            ${{ inputs.codename }}_defconfig
+
+          # Compile Kernel with ThinLTO & Polly optimizations
+          make -j$(nproc --all) \
+            O=out \
+            ARCH=arm64 \
+            CC="ccache clang" \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            KCFLAGS="-O3 -mllvm -polly -mllvm -polly-run-dce" \
+            KCPPFLAGS="-O3" \
+            LOCALVERSION_AUTO=0
+
           ccache -s
 
       - name: Copy Images
