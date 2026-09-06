@@ -72,9 +72,9 @@ jobs:
           git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           git clone https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new
           #git clone https://github.com/kerneltoast/${{ inputs.repo }}
-          git clone https://github.com/kerneltoast/android_kernel_google_tensynos
+          git clone https://github.com/bhazheng/android_kernel_google_tensynos
           # SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
-          SUSFS_BRANCH="gki-android14-6.1-dev"
+          SUSFS_BRANCH="gki-android14-6.1"
           echo "Using branch for SUSFS: $"
           git clone https://gitlab.com/pershoot/susfs4ksu.git -b "$SUSFS_BRANCH"
 
@@ -91,7 +91,7 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          SUSFS_VERSION="2.1.0"
+          SUSFS_VERSION="2.3.0"
 
           echo "Applying SUSFS patches..."
 
