@@ -226,38 +226,54 @@ jobs:
           set -euo pipefail
           echo "Packaging NoMount metamodule using Zig..."
 
-          source_dir="${RUNNER_TEMP}/nomount-module-source"
-          module_dir="${RUNNER_TEMP}/nomount-metamodule"
-          module_zip="${GITHUB_WORKSPACE}/NoMount-${NOMOUNT_COMMIT}.zip"
+          cd "$GITHUB_WORKSPACE"
+          
+          # Pastikan commit terdefinisi, jika kosong ambil HEAD dev branch
+          COMMIT_HASH="${NOMOUNT_COMMIT:-}"
+          if [ -z "$COMMIT_HASH" ]; then
+            COMMIT_HASH="$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)"
+          fi
+          echo "Using NoMount commit: $COMMIT_HASH"
 
-          git clone --no-checkout https://github.com/maxsteeel/nomount.git "$source_dir"[cite: 3]
-          git -C "$source_dir" fetch --depth=1 origin "$NOMOUNT_COMMIT"[cite: 3]
-          git -C "$source_dir" checkout --detach "$NOMOUNT_COMMIT"[cite: 3]
+          SRC_DIR="$GITHUB_WORKSPACE/nomount_src"
+          MOD_DIR="$GITHUB_WORKSPACE/nomount_mod"
+          ZIP_OUT="$GITHUB_WORKSPACE/NoMount-${COMMIT_HASH}.zip"
 
-          mkdir -p "$source_dir/bin"[cite: 3]
+          rm -rf "$SRC_DIR" "$MOD_DIR"
+          mkdir -p "$SRC_DIR" "$MOD_DIR"
+
+          git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
+          git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
+
+          mkdir -p "$SRC_DIR/bin"
           (
-            cd "$source_dir/userspace/src"[cite: 3]
+            cd "$SRC_DIR/userspace/src"
             zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib \
               -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
-              -Wl,--entry=_start nm.c -o ../../bin/nm-arm64[cite: 3]
+              -Wl,--entry=_start nm.c -o ../../bin/nm-arm64
             zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding \
               -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
               -ffunction-sections -fdata-sections -Wl,--gc-sections \
-              -Wl,--entry=_start nm.c -o ../../bin/nm-arm[cite: 3]
+              -Wl,--entry=_start nm.c -o ../../bin/nm-arm
           )
 
-          cp -a "$source_dir/module" "$module_dir"[cite: 3]
-          mkdir -p "$module_dir/bin"[cite: 3]
-          install -m 0755 "$source_dir/bin/nm-arm64" "$module_dir/bin/nm-arm64"[cite: 3]
-          install -m 0755 "$source_dir/bin/nm-arm" "$module_dir/bin/nm-arm"[cite: 3]
-          sed -i "s/^versionCode=.*/versionCode=1/" "$module_dir/module.prop"[cite: 3]
-          printf '%s\n' "$NOMOUNT_COMMIT" > "$module_dir/NOMOUNT_SOURCE_COMMIT"[cite: 3]
+          cp -a "$SRC_DIR/module/." "$MOD_DIR/"
+          mkdir -p "$MOD_DIR/bin"
+          install -m 0755 "$SRC_DIR/bin/nm-arm64" "$MOD_DIR/bin/nm-arm64"
+          install -m 0755 "$SRC_DIR/bin/nm-arm" "$MOD_DIR/bin/nm-arm"
+          sed -i "s/^versionCode=.*/versionCode=1/" "$MOD_DIR/module.prop"
+          printf '%s\n' "$COMMIT_HASH" > "$MOD_DIR/NOMOUNT_SOURCE_COMMIT"
+
           (
-            cd "$module_dir"[cite: 3]
-            zip -qr "$module_zip" .[cite: 3]
+            cd "$MOD_DIR"
+            zip -qr "$ZIP_OUT" ./*
           )
-          sha256sum "$module_zip" > "${module_zip}.sha256"[cite: 3]
-          echo "[+] NoMount metamodule packaged: $module_zip"
+          sha256sum "$ZIP_OUT" > "${ZIP_OUT}.sha256"
+
+          # Bersihkan direktori temporary compile
+          rm -rf "$SRC_DIR" "$MOD_DIR"
+
+          echo "[+] NoMount metamodule packaged successfully: $ZIP_OUT"
 
       - name: Apply All Kernel Configurations
         shell: bash
