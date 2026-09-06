@@ -76,11 +76,29 @@ jobs:
           git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" &
           git clone --depth=1 https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new &
           
-          # Repositori kernel wajib di-clone penuh (tanpa --depth=1) agar skrip WLAN/UWB Google dapat melacak HEAD
+          # Repositori kernel wajib di-clone penuh (tanpa --depth=1)
           git clone https://github.com/bhazheng/android_kernel_google_tensynos &
           
           git clone --depth=1 https://gitlab.com/pershoot/susfs4ksu.git -b "gki-android14-6.1" &
           wait
+
+      - name: Apply SUSFS Patches (Pre-Root)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+          
+          # SuSFS Common
+          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
+          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
+
+          # Terapkan patch SuSFS *SEBELUM* setup.sh dijalankan. 
+          # Ini mencegah Hunk #3 FAILED di selinuxfs.c karena file belum dimodifikasi oleh ReSukiSU.
+          perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
+          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch
+          perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
+          
+          patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
 
       - name: Add Root Implementation
         shell: bash
@@ -93,12 +111,12 @@ jobs:
             curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
           elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-            # Menghapus sifat 'static' agar simbol dapat diekspor untuk ReSukiSU
+            
+            # Hapus sifat 'static' agar simbol dapat diekspor untuk static_export_check
             sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c
             grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
           fi
 
-          # Linker presisi agar sesuai dengan pemanggilan Makefile Kbuild
           if [ -d "KernelSU/kernel" ]; then
             ln -sfn ../KernelSU/kernel drivers/kernelsu
             ln -sfn ../KernelSU/kernel drivers/KernelSU
@@ -108,24 +126,12 @@ jobs:
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Apply SUSFS & Optimization Patches
+      - name: Apply Optimization & Network Patches
         shell: bash
         run: |
           set -euo pipefail
           cd "$CONFIG"
           
-          # SuSFS Common
-          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
-
-          # Trik Perl dan Patch SuSFS diaplikasikan universal ke SEMUA varian agar ReSukiSU tidak kehilangan hook utama
-          perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
-          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
-          perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
-          
-          patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
-
-          # Apply BBRv3, Unicode, & Performance Patches via Loop Array
           REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
           PATCHES=(
             "bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
@@ -143,7 +149,6 @@ jobs:
             curl -fsSL --retry 3 "$REPO/$p" | patch -p1 --forward || true
           done
 
-          # Remove protected exports (OOT modules)
           sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
@@ -169,7 +174,6 @@ jobs:
 
           rm -rf "$SRC_DIR" "$MOD_DIR"
           
-          # Clone repository SEBELUM membuat sub-direktori (mencegah eror folder tidak kosong)
           git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
           git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
           
