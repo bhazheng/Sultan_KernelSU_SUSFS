@@ -116,8 +116,8 @@ jobs:
           cp ../kernel_patches_new/sys.c_fix.patch ./
           patch -p1 < sys.c_fix.patch || true
 
-          cp ../kernel_patches_new/fix_open.patch ./
-          patch -p1 < fix_open.patch || true
+          # cp ../kernel_patches_new/fix_open.patch ./
+          # patch -p1 < fix_open.patch || true
 
       - name: Apply BBRv3 Patch (Android14-6.1)
         shell: bash
