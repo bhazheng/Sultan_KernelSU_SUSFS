@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ccache libssl-dev libelf-dev bc bison flex
+          sudo apt-get install -y --no-install-recommends ccache libssl-dev libelf-dev bc bison flex perl
           echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> "$GITHUB_ENV"
 
       - name: Setup CCache Cache
@@ -98,22 +98,24 @@ jobs:
             echo "[+] Integrating ReSukiSU..."
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
-            # Fix static export check ReSukiSU
+            # Hapus keyword static agar EXPORT_SYMBOL valid saat linking GCC
+            sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c
             if ! grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null; then
               echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
             fi
           fi
 
-          if [ -d "KernelSU" ] || [ -L "KernelSU" ]; then
-            ln -sf ../KernelSU drivers/kernelsu
-            ln -sf ../KernelSU drivers/KernelSU
+          # Sambungkan symlink secara presisi ke subfolder KernelSU/kernel
+          if [ -d "KernelSU/kernel" ]; then
+            ln -sfn ../KernelSU/kernel drivers/kernelsu
+            ln -sfn ../KernelSU/kernel drivers/KernelSU
           fi
 
           sed -i '/KernelSU/d' drivers/Makefile
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Apply SUSFS Patches
+      - name: Apply SUSFS Patches (Adopted from Sultan-Ori)
         shell: bash
         run: |
           set -euo pipefail
@@ -123,7 +125,14 @@ jobs:
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            # Trik Perl dari sultanori: netralkan hook libperfmgr_redirect sementara
+            perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
+            
+            # Terapkan patch utama SuSFS GKI
             patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+            
+            # Kembalikan hook libperfmgr_redirect bersamaan dengan hook SuSFS
+            perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
           fi
           
           patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
@@ -249,10 +258,6 @@ jobs:
 
           cat >> "$DEFCONFIG" << 'EOF'
 
-          # Pertahankan Debug Info Kernel Sesuai Kebutuhan
-          CONFIG_DEBUG_INFO=y
-          CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
-
           # KernelSU & SuSFS
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
@@ -362,7 +367,7 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
 
-          # CCache Hit-Rate Optimization
+          # CCache Optimization
           export CCACHE_NOHASHDIR=true
           export CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,locale
           ccache -M 15G
@@ -377,7 +382,6 @@ jobs:
 
           # 2. Injeksi & kunci konfigurasi penting
           ./scripts/config --file out/.config \
-            -e CONFIG_DEBUG_INFO \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -399,9 +403,9 @@ jobs:
           make O=out olddefconfig
 
           echo "=== Verifikasi Nilai Config KSU ==="
-          grep -E "CONFIG_DEBUG_INFO|CONFIG_KSU|CONFIG_KALLSYMS|CONFIG_KPROBES" out/.config || true
+          grep -E "CONFIG_KSU|CONFIG_KALLSYMS|CONFIG_KPROBES" out/.config || true
 
-          # 3. Kompilasi Paralel
+          # 3. Kompilasi Paralel dengan Fallback Single-Thread
           make O=out LOCALVERSION_AUTO=0 -j$(nproc --all) || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
             make O=out LOCALVERSION_AUTO=0 -j1
@@ -434,7 +438,6 @@ jobs:
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
 
-          # Ekspor metadata untuk GitHub Summary
           echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
           echo "ZIP_SHA=$(cat ${ZIP_NAME}.sha256 | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
@@ -515,4 +518,3 @@ jobs:
           name: rej-${{ inputs.codename }}-${{ matrix.variant }}
           path: |
             rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
-            
