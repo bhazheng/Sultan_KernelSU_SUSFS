@@ -49,57 +49,6 @@ jobs:
           key: ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
           restore-keys: |
             ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-
-name: Sultan
-permissions:
-  contents: write
-  actions: write
-
-on:
-  workflow_call:
-    inputs:
-      repo:
-        required: true
-        type: string
-      codename:
-        required: true
-        type: string
-      android_version:
-        required: true
-        type: string
-      kernel_version:
-        required: true
-        type: string
-
-jobs:
-  build-kernel-sultan-kernelsu-susfs:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: ["KernelSU-Next", "ReSukiSU"]
-
-    steps:
-      - name: Free Disk Space on Runner
-        shell: bash
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift
-          sudo docker image prune --all --force
-          echo "[+] Disk space cleaned up"
-
-      - name: Install CCache & Essential Build Tools
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ccache libssl-dev libelf-dev bc bison flex perl
-          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> "$GITHUB_ENV"
-
-      - name: Setup CCache Cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.ccache
-          key: ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
-          restore-keys: |
-            ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-
             ccache-gcc-${{ inputs.codename }}-
 
       - name: Download and extract GCC 14.2.0 (Streamed)
@@ -532,3 +481,4 @@ jobs:
           name: rej-${{ inputs.codename }}-${{ matrix.variant }}
           path: |
             rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
+            
