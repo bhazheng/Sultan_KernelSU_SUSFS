@@ -257,7 +257,8 @@ jobs:
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          # OPEN_REDIRECT dimatikan karena NoMount sudah menangani VFS redirection
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=n
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_THREAD_INFO_IN_TASK=y
 
