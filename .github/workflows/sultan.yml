@@ -79,7 +79,7 @@ jobs:
           # Repositori kernel wajib di-clone penuh (tanpa --depth=1)
           git clone https://github.com/bhazheng/android_kernel_google_tensynos &
           
-          git clone --depth=1 https://gitlab.com/pershoot/susfs4ksu.git -b "gki-android14-6.1" &
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" &
           wait
 
       - name: Add Root Implementation
