@@ -142,7 +142,65 @@ jobs:
           echo "# Mountify Support" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_TMPFS_XATTR=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          
+      - name: Setup NoMount
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          cd "$CONFIG"
+          KERNEL_DIR="$(pwd)"
+
+          test -d "$KERNEL_DIR/fs" || {
+            echo "Kernel source directory does not exist: $KERNEL_DIR" >&2
+            exit 1
+          }
+
+          # Kosongkan jika ingin latest dev tip, atau isi dengan 40-digit commit SHA jika ingin di-pin
+          requested_commit=""
+
+          if [ -z "$requested_commit" ]; then
+            echo "NoMount: no commit pinned, using latest dev branch tip"
+            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+              https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s dev
+            actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
+          else
+            if ! [[ "$requested_commit" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "NoMount commit must be a full 40-character SHA." >&2
+              exit 2
+            fi
+            setup_script="${RUNNER_TEMP}/nomount-setup-${requested_commit}.sh"
+            curl --fail --location --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors \
+              "https://raw.githubusercontent.com/maxsteeel/nomount/${requested_commit}/kernel/setup.sh" \
+              --output "$setup_script"
+            chmod 0755 "$setup_script"
+
+            if [ ! -d "$KERNEL_DIR/NoMount" ]; then
+              git clone --no-checkout https://github.com/maxsteeel/nomount.git "$KERNEL_DIR/NoMount"
+            fi
+            git -C "$KERNEL_DIR/NoMount" fetch --depth=1 origin "$requested_commit"
+            git -C "$KERNEL_DIR/NoMount" checkout --detach --quiet "$requested_commit"
+            
+            "$setup_script" "$requested_commit"
+            actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
+            if [ "$actual_commit" != "$requested_commit" ]; then
+              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2
+              exit 1
+            fi
+          fi
+
+          if [ ! -L "$KERNEL_DIR/fs/nomount" ]; then
+            echo "NoMount integration failed: fs/nomount symlink missing" >&2
+            exit 1
+          fi
+
+          echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
+          echo "NoMount integrated successfully (commit: $actual_commit)"
+
+          # Enable CONFIG_NOMOUNT langsung ke defconfig device
+          echo "# NoMount Configuration" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          
       - name: Configure Networking
         if: false
         run: |
