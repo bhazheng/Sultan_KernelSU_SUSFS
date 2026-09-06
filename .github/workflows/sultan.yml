@@ -478,4 +478,49 @@ jobs:
             !${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload NoMount Metamodule Artifact
-        uses: actions/u
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}
+          path: |
+            ${{ github.workspace }}/NoMount-*.zip
+            ${{ github.workspace }}/NoMount-*.sha256
+
+      - name: Collect .rej files
+        if: ${{ always() }}
+        id: collect_rej
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          rm -rf rej
+          mkdir -p rej
+          found="false"
+          while IFS= read -r -d '' rej_file; do
+            found="true"
+            original_file="${rej_file%.rej}"
+            rej_rel="${rej_file#./}"
+            original_rel="${original_file#./}"
+            mkdir -p "rej/$(dirname "$rej_rel")"
+            cp -f "$rej_file" "rej/$rej_rel"
+            if [[ -f "$original_file" ]]; then
+              mkdir -p "rej/$(dirname "$original_rel")"
+              cp -f "$original_file" "rej/$original_rel"
+            fi
+          done < <(find . -type f -name '*.rej' -print0)
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Zip collected .rej bundle
+        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej
+
+      - name: Upload .rej bundle
+        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rej-${{ inputs.codename }}-${{ matrix.variant }}
+          path: |
+            rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
