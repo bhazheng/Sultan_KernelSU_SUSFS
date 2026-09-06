@@ -25,12 +25,6 @@ jobs:
       matrix:
         variant: ["KernelSU-Next", "ReSukiSU"]
     steps:
-      - name: Free Disk Space on Runner
-        shell: bash
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift
-          sudo docker image prune --all --force
-          echo "[+] Disk space cleaned up"
       - name: Install CCache & Essential Build Tools
         shell: bash
         run: |
@@ -122,6 +116,7 @@ jobs:
             # Penanganan wajib untuk simbol statis ReSukiSU
             sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c || true
             grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c || true
+
           fi
           # Unduh dan terapkan static.patch secara kondisional ke folder root yang tepat
           echo "[+] Downloading and applying static.patch..."
@@ -134,9 +129,13 @@ jobs:
           # -p2 membuang "a/" dan "kernel/" sekaligus, sesuai posisi -d.
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ] && [ -d "KernelSU-Next/kernel" ]; then
             patch -p2 -d "KernelSU-Next/kernel" < static.patch || true
-          elif [ "${{ matrix.variant }}" == "ReSukiSU" ] && [ -d "KernelSU/kernel" ]; then
-            patch -p2 -d "KernelSU/kernel" < static.patch || true
           fi
+          # FIX: static.patch SENGAJA dilewati untuk ReSukiSU. Source ReSukiSU sudah
+          # menangani unstatic 3 fungsi target patch ini (security_context_to_sid_with_policy,
+          # security_sid_to_context_with_policy, security_compute_av_user_with_policy) lewat
+          # macro __maybe_static miliknya sendiri (lihat kernel/feature/selinux_hide.c).
+          # Text yang dicari static.patch (deklarasi "static int ...") tidak akan pernah
+          # ditemukan di fork ini, jadi patch selalu gagal 1/1 hunk dan tidak berguna.
 
           rm -f static.patch
           # Pengaturan symlink dinamis yang aman agar Kbuild/Kconfig terbaca sempurna
@@ -169,6 +168,19 @@ jobs:
           patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
 
+          # FIX (ReSukiSU only): hunk "wire my_sel_open_handle_status ke .open" pada
+          # security/selinux/selinuxfs.c dari patch di atas GAGAL, karena step
+          # sebelumnya (Add Root Implementation) sudah menghapus kata "static" dari
+          # baris "static const struct file_operations sel_handle_status_ops = {"
+          # sebelum patch ini berjalan, sehingga context-nya tidak cocok lagi.
+          # Di sini kita wire manual, idempotent (aman dijalankan walau sudah ter-wire).
+          if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
+            if grep -q "my_sel_open_handle_status(struct inode" security/selinux/selinuxfs.c 2>/dev/null \
+               && ! grep -q "\.open.*=.*my_sel_open_handle_status" security/selinux/selinuxfs.c 2>/dev/null; then
+              perl -0pi -e 's/\t\.open\t\t= sel_open_handle_status,\n/#ifdef CONFIG_KSU_SUSFS\n\t.open\t\t= my_sel_open_handle_status,\n#else\n\t.open\t\t= sel_open_handle_status,\n#endif \/\/ #ifdef CONFIG_KSU_SUSFS\n/' security/selinux/selinuxfs.c || true
+            fi
+          fi
+
           patch -p1 < ../kernel_patches_new/sys.c_fix.patch || true
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -176,8 +188,9 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          # Terapkan gki_ptrace.patch langsung dari WildKernels
-          curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/refs/heads/main/gki_ptrace.patch" | patch -p1 --forward || true
+          # gki_ptrace.patch DINONAKTIFKAN: banyak hunk gagal (ptrace.h, signal.c,
+          # tracehook.h) karena source kernel sudah tidak cocok dengan patch ini.
+          # curl -fsSL --retry 3 "https://raw.githubusercontent.com/WildKernels/kernel_patches/refs/heads/main/gki_ptrace.patch" | patch -p1 --forward || true
           REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
           PATCHES=(
             "bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
