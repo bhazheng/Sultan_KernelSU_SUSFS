@@ -25,13 +25,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ["RKSU"]
+        variant: ["KernelSU-Next", "ReSukiSU"]
     steps:
       - name: Free Disk Space on Runner
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift
           sudo docker image prune --all --force
           echo "[+] Disk space cleaned up"
+
+      - name: Install CCache & Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache
+          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> $GITHUB_ENV
+
+      - name: Setup CCache Cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ inputs.codename }}-${{ matrix.variant }}-
+            ccache-${{ inputs.codename }}-
 
       - name: Download and extract GCC 14.2.0 toolchain
         run: |
@@ -67,12 +82,17 @@ jobs:
           echo "Using branch for SUSFS: $SUSFS_BRANCH"
           git clone https://gitlab.com/pershoot/susfs4ksu.git -b "$SUSFS_BRANCH"
 
-      - name: Add KernelSU
+      - name: Add Root Implementation (Matrix Conditional)
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
-          echo "Adding KernelSU..."
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            echo "[+] Adding KernelSU-Next..."
+            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash
+          elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
+            echo "[+] Adding ReSukiSU..."
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          fi
 
       - name: Apply SUSFS Patches
         run: |
@@ -113,20 +133,20 @@ jobs:
           REPO_RAW="https://raw.githubusercontent.com/WildKernels/kernel_patches/main"
 
           # 1. Matikan Logspam CPU IRQ & System
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true[cite: 1, 2]
 
           # 2. Optimasi Memori & Operasi AArch64
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true[cite: 1, 2]
 
           # 3. Optimasi Latensi TCP & Socket Memory Packets
-          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true[cite: 1, 2]
 
           # 4. Tweak I/O Storage F2FS
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true[cite: 1, 2]
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true[cite: 1, 2]
 
           echo "[+] Category 1 patches applied successfully"
 
@@ -169,7 +189,7 @@ jobs:
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
           else
             if ! [[ "$requested_commit" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "NoMount commit must be a full 40-character SHA." >&2
+              echo "NoMount commit must be a full 40-character SHA." >&2[cite: 3]
               exit 2
             fi
             setup_script="${RUNNER_TEMP}/nomount-setup-${requested_commit}.sh"
@@ -187,7 +207,7 @@ jobs:
             "$setup_script" "$requested_commit"
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
             if [ "$actual_commit" != "$requested_commit" ]; then
-              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2
+              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2[cite: 3]
               exit 1
             fi
           fi
@@ -210,33 +230,33 @@ jobs:
           module_dir="${RUNNER_TEMP}/nomount-metamodule"
           module_zip="${GITHUB_WORKSPACE}/NoMount-${NOMOUNT_COMMIT}.zip"
 
-          git clone --no-checkout https://github.com/maxsteeel/nomount.git "$source_dir"
-          git -C "$source_dir" fetch --depth=1 origin "$NOMOUNT_COMMIT"
-          git -C "$source_dir" checkout --detach "$NOMOUNT_COMMIT"
+          git clone --no-checkout https://github.com/maxsteeel/nomount.git "$source_dir"[cite: 3]
+          git -C "$source_dir" fetch --depth=1 origin "$NOMOUNT_COMMIT"[cite: 3]
+          git -C "$source_dir" checkout --detach "$NOMOUNT_COMMIT"[cite: 3]
 
-          mkdir -p "$source_dir/bin"
+          mkdir -p "$source_dir/bin"[cite: 3]
           (
-            cd "$source_dir/userspace/src"
+            cd "$source_dir/userspace/src"[cite: 3]
             zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib \
               -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
-              -Wl,--entry=_start nm.c -o ../../bin/nm-arm64
+              -Wl,--entry=_start nm.c -o ../../bin/nm-arm64[cite: 3]
             zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding \
               -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
               -ffunction-sections -fdata-sections -Wl,--gc-sections \
-              -Wl,--entry=_start nm.c -o ../../bin/nm-arm
+              -Wl,--entry=_start nm.c -o ../../bin/nm-arm[cite: 3]
           )
 
-          cp -a "$source_dir/module" "$module_dir"
-          mkdir -p "$module_dir/bin"
-          install -m 0755 "$source_dir/bin/nm-arm64" "$module_dir/bin/nm-arm64"
-          install -m 0755 "$source_dir/bin/nm-arm" "$module_dir/bin/nm-arm"
-          sed -i "s/^versionCode=.*/versionCode=1/" "$module_dir/module.prop"
-          printf '%s\n' "$NOMOUNT_COMMIT" > "$module_dir/NOMOUNT_SOURCE_COMMIT"
+          cp -a "$source_dir/module" "$module_dir"[cite: 3]
+          mkdir -p "$module_dir/bin"[cite: 3]
+          install -m 0755 "$source_dir/bin/nm-arm64" "$module_dir/bin/nm-arm64"[cite: 3]
+          install -m 0755 "$source_dir/bin/nm-arm" "$module_dir/bin/nm-arm"[cite: 3]
+          sed -i "s/^versionCode=.*/versionCode=1/" "$module_dir/module.prop"[cite: 3]
+          printf '%s\n' "$NOMOUNT_COMMIT" > "$module_dir/NOMOUNT_SOURCE_COMMIT"[cite: 3]
           (
-            cd "$module_dir"
-            zip -qr "$module_zip" .
+            cd "$module_dir"[cite: 3]
+            zip -qr "$module_zip" .[cite: 3]
           )
-          sha256sum "$module_zip" > "${module_zip}.sha256"
+          sha256sum "$module_zip" > "${module_zip}.sha256"[cite: 3]
           echo "[+] NoMount metamodule packaged: $module_zip"
 
       - name: Apply All Kernel Configurations
@@ -257,7 +277,6 @@ jobs:
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          # OPEN_REDIRECT dimatikan karena NoMount sudah menangani VFS redirection
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=n
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_THREAD_INFO_IN_TASK=y
@@ -339,7 +358,7 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
           echo "Running sed commands..."
-          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-Wild"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
@@ -348,8 +367,10 @@ jobs:
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc LOCALVERSION_AUTO=0 -j$(nproc --all)
+          ccache -s
+          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc" -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc" LOCALVERSION_AUTO=0 -j$(nproc --all)
+          ccache -s
 
       - name: Copy Images
         run: |
