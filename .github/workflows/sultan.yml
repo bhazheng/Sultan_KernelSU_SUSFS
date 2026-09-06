@@ -62,7 +62,7 @@ jobs:
           rm -f *.tar.gz
 
           echo "CLANG_PATH=$CLANG_DIR/bin" >> "$GITHUB_ENV"
-          echo "[+] AOSP Clang r614150 extracted successfully to $CLANG_DIR/bin"
+          echo "[+] AOSP Clang r614150 extracted successfully"
 
       - name: Set up Zig Compiler
         uses: jetsung/setup-zig@v0.0.4
@@ -122,8 +122,8 @@ jobs:
           cp ../kernel_patches_new/sys.c_fix.patch ./
           patch -p1 < sys.c_fix.patch || true
 
-          cp ../kernel_patches_new/fix_open.patch ./
-          patch -p1 < fix_open.patch || true
+          # cp ../kernel_patches_new/fix_open.patch ./
+          # patch -p1 < fix_open.patch || true
 
       - name: Apply BBRv3 Patch (Android14-6.1)
         shell: bash
@@ -144,20 +144,20 @@ jobs:
           REPO_RAW="https://raw.githubusercontent.com/WildKernels/kernel_patches/main"
 
           # 1. Matikan Logspam CPU IRQ & System
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true[cite: 1]
-          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_system_logspam.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/silence_irq_cpu_logspam.patch" | patch -p1 || true
 
           # 2. Optimasi Memori & Operasi AArch64
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true[cite: 1]
-          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimise_memcmp.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/optimized_mem_operations.patch" | patch -p1 || true
 
           # 3. Optimasi Latensi TCP & Socket Memory Packets
-          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true[cite: 1]
-          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/force_tcp_nodelay.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/increase_sk_mem_packets.patch" | patch -p1 || true
 
           # 4. Tweak I/O Storage F2FS
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true[cite: 1]
-          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true[cite: 1]
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_reduce_congestion.patch" | patch -p1 || true
+          curl -fsSL --retry 3 "$REPO_RAW/common/f2fs_enlarge_min_fsync_blocks.patch" | patch -p1 || true
 
           echo "[+] Category 1 patches applied successfully"
 
@@ -200,7 +200,7 @@ jobs:
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
           else
             if ! [[ "$requested_commit" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "NoMount commit must be a full 40-character SHA." >&2[cite: 1]
+              echo "NoMount commit must be a full 40-character SHA." >&2
               exit 2
             fi
             setup_script="${RUNNER_TEMP}/nomount-setup-${requested_commit}.sh"
@@ -218,7 +218,7 @@ jobs:
             "$setup_script" "$requested_commit"
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
             if [ "$actual_commit" != "$requested_commit" ]; then
-              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2[cite: 1]
+              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2
               exit 1
             fi
           fi
@@ -392,64 +392,51 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
           echo "Running sed commands..."
-          sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig[cite: 1]
-          sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true[cite: 1]
-          sed -i '/echo "+"$/d' scripts/setlocalversion[cite: 1]
-          sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true[cite: 1]
+          sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
+          sed -i '/echo "+"$/d' scripts/setlocalversion
+          sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-      - name: Build the Kernel with AOSP Clang r614150 (ThinLTO)
+      - name: Build the Kernel with AOSP Clang r614150
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
           
           mkdir -p out
+
+          # Export variabel compiler secara konsisten ke sub-make
           export PATH="$CLANG_PATH:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
+          export CC="ccache clang"
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+          export KCFLAGS="-O3"
+          export KCPPFLAGS="-O3"
+
+          # Cegah clock skew / loop timestamp pada berkas defconfig
+          touch arch/arm64/configs/${{ inputs.codename }}_defconfig
 
           ccache -s
 
-          # 1. Generate Defconfig
-          make -j$(nproc --all) \
-            O=out \
-            ARCH=arm64 \
-            CC="ccache clang" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            ${{ inputs.codename }}_defconfig
+          # 1. Buat defconfig
+          make O=out -j$(nproc --all) ${{ inputs.codename }}_defconfig
 
-          # Verifikasi konfigurasi KSU di file .config aktif
+          # 2. Sinkronkan dependensi konfigurasi untuk menghentikan infinite loop SYNC auto.conf.cmd
+          make O=out syncconfig
+
+          # Verifikasi konfigurasi KSU di berkas aktif
           echo "=== Verifikasi Status Config KSU ==="
           grep -E "CONFIG_KSU|CONFIG_KALLSYMS|CONFIG_KPROBES" out/.config || true
 
-          # 2. Compile Kernel dengan ThinLTO & Fallback Single-Thread jika Error
-          make -j$(nproc --all) \
-            O=out \
-            ARCH=arm64 \
-            CC="ccache clang" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            KCFLAGS="-O3" \
-            KCPPFLAGS="-O3" \
-            LOCALVERSION_AUTO=0 || {
-              echo "::error::Build paralel Clang gagal. Menjalankan single-thread untuk melacak baris eror:"
-              make \
-                O=out \
-                ARCH=arm64 \
-                CC="ccache clang" \
-                LLVM=1 \
-                LLVM_IAS=1 \
-                CROSS_COMPILE=aarch64-linux-gnu- \
-                CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-                KCFLAGS="-O3" \
-                KCPPFLAGS="-O3" \
-                LOCALVERSION_AUTO=0 -j1
-              exit 1
-            }
+          # 3. Kompilasi kernel (paralel dengan fallback single-thread jika gagal)
+          make O=out LOCALVERSION_AUTO=0 -j$(nproc --all) || {
+            echo "::error::Build paralel Clang gagal. Menjalankan single-thread untuk melacak baris eror:"
+            make O=out LOCALVERSION_AUTO=0 -j1
+            exit 1
+          }
 
           ccache -s
 
@@ -458,13 +445,13 @@ jobs:
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
           echo "Copying Image.lz4 and concatenating DTB files..."
-          cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4[cite: 1]
+          cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           if [ "${{ inputs.codename }}" == "gs201" ]; then
-            cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb[cite: 1]
+            cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb
           elif [ "${{ inputs.codename }}" == "zuma" ]; then
-            cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb[cite: 1]
+            cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb
           elif [ "${{ inputs.codename }}" == "zumapro" ]; then
-            cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb[cite: 1]
+            cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
           fi
 
       - name: Create ZIP Files for Different Formats
@@ -473,7 +460,7 @@ jobs:
           cd ./AnyKernel3
           ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan.zip"
           echo "Creating zip file $ZIP_NAME..."
-          zip -r "../$ZIP_NAME" ./*[cite: 1]
+          zip -r "../$ZIP_NAME" ./*
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
@@ -525,7 +512,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej[cite: 1]
+          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej
 
       - name: Upload .rej bundle
         if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
