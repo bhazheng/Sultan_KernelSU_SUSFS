@@ -48,15 +48,21 @@ jobs:
             ccache-${{ inputs.codename }}-${{ matrix.variant }}-
             ccache-${{ inputs.codename }}-
 
-      - name: Download and extract AOSP Clang r510019
+      - name: Download and extract AOSP Clang r614150
+        shell: bash
         run: |
-          echo "Downloading AOSP Clang r510019 toolchain..."
-          mkdir -p "$GITHUB_WORKSPACE/clang-aosp"
-          curl -fsSL https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510019.tar.gz -o clang-r510019.tar.gz
-          tar -zxf clang-r510019.tar.gz -C "$GITHUB_WORKSPACE/clang-aosp"
-          rm -f clang-r510019.tar.gz
-          echo "CLANG_PATH=$GITHUB_WORKSPACE/clang-aosp/bin" >> $GITHUB_ENV
-          echo "[+] AOSP Clang r510019 extracted successfully"
+          set -euo pipefail
+          echo "Downloading AOSP Clang r614150 archive..."
+          CLANG_DIR="$GITHUB_WORKSPACE/clang-aosp"
+          mkdir -p "$CLANG_DIR"
+          cd "$CLANG_DIR"
+
+          curl -LJOk https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/clang-r614150.tar.gz
+          tar -xf *.tar.gz
+          rm -f *.tar.gz
+
+          echo "CLANG_PATH=$CLANG_DIR/bin" >> "$GITHUB_ENV"
+          echo "[+] AOSP Clang r614150 extracted successfully to $CLANG_DIR/bin"
 
       - name: Set up Zig Compiler
         uses: jetsung/setup-zig@v0.0.4
@@ -189,7 +195,7 @@ jobs:
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
           else
             if ! [[ "$requested_commit" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "NoMount commit must be a full 40-character SHA." >&2[cite: 3]
+              echo "NoMount commit must be a full 40-character SHA." >&2
               exit 2
             fi
             setup_script="${RUNNER_TEMP}/nomount-setup-${requested_commit}.sh"
@@ -207,7 +213,7 @@ jobs:
             "$setup_script" "$requested_commit"
             actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
             if [ "$actual_commit" != "$requested_commit" ]; then
-              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2[cite: 3]
+              echo "NoMount commit mismatch: expected $requested_commit, got $actual_commit." >&2
               exit 1
             fi
           fi
@@ -228,7 +234,6 @@ jobs:
 
           cd "$GITHUB_WORKSPACE"
           
-          # Pastikan commit terdefinisi, jika kosong ambil HEAD dev branch
           COMMIT_HASH="${NOMOUNT_COMMIT:-}"
           if [ -z "$COMMIT_HASH" ]; then
             COMMIT_HASH="$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)"
@@ -270,9 +275,7 @@ jobs:
           )
           sha256sum "$ZIP_OUT" > "${ZIP_OUT}.sha256"
 
-          # Bersihkan direktori temporary compile
           rm -rf "$SRC_DIR" "$MOD_DIR"
-
           echo "[+] NoMount metamodule packaged successfully: $ZIP_OUT"
 
       - name: Apply All Kernel Configurations
@@ -387,7 +390,7 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-      - name: Build the Kernel with AOSP Clang r510019 (ThinLTO)
+      - name: Build the Kernel with AOSP Clang r614150 (ThinLTO)
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
@@ -504,4 +507,4 @@ jobs:
         with:
           name: rej-${{ inputs.codename }}-${{ matrix.variant }}
           path: |
-            rej-${{ inputs.codename }}-${{ matrix.variant }}.zip
+            rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
