@@ -161,9 +161,15 @@ jobs:
           MOD_DIR="nomount_mod"
           ZIP_OUT="NoMount-${COMMIT_HASH}.zip"
 
-          mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin"
+          # 1. Bersihkan direktori sisa build sebelumnya
+          rm -rf "$SRC_DIR" "$MOD_DIR"
+
+          # 2. Lakukan Git Clone LEBIH DULU
           git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
           git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
+
+          # 3. BARU buat direktori bin di dalamnya
+          mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin"
 
           (
             cd "$SRC_DIR/userspace/src"
