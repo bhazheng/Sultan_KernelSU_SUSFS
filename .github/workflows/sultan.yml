@@ -372,13 +372,21 @@ jobs:
           echo "Creating zip file $ZIP_NAME..."
           zip -r "../$ZIP_NAME" ./*
 
-      - name: Upload Build Artifacts
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ inputs.codename }}-${{ matrix.variant }}
           path: |
-            *.zip
-            *.sha256
+            ${{ github.workspace }}/*.zip
+            !${{ github.workspace }}/NoMount-*.zip
+
+      - name: Upload NoMount Metamodule Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}
+          path: |
+            ${{ github.workspace }}/NoMount-*.zip
+            ${{ github.workspace }}/NoMount-*.sha256
 
       - name: Collect .rej files
         if: ${{ always() }}
