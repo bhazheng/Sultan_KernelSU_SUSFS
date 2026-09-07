@@ -90,7 +90,7 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          # 1. Bersihkan sisa direktori/symlink usang
+          # Bersihkan sisa direktori/symlink usang
           rm -rf KernelSU KernelSU-Next drivers/kernelsu drivers/KernelSU
           sed -i '/kernelsu/d' drivers/Makefile 2>/dev/null || true
           sed -i '/kernelsu/d' drivers/Kconfig 2>/dev/null || true
@@ -135,7 +135,7 @@ jobs:
               "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
               | bash
 
-            # Stub fungsi legacy untuk mencegah error link vmlinux
+            # Stub fungsi legacy aman indentasi
             if ! grep -rq "^int ksu_install_su_fd" drivers/kernelsu/feature/sucompat.c 2>/dev/null; then
               {
                 echo ""
@@ -163,15 +163,15 @@ jobs:
             rm -f static.patch
           fi
 
-          # 2. Hapus depends on KPROBES agar tidak dibuang Kbuild
-          sed -i 's/depends on KPROBES//g' drivers/kernelsu/Kconfig 2>/dev/null || true
-
-          # 3. Registrasi Aman ke Kconfig dan Makefile root
+          # Registrasi Aman ke Kconfig dan Makefile root
           sed -i '/kernelsu/d' drivers/Kconfig
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
+
+          # Validasi
+          test -e drivers/kernelsu
 
       - name: Apply SUSFS Patches
         shell: bash
@@ -186,52 +186,6 @@ jobs:
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
           patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
-
-          # ---------------------------------------------------------
-          # MANUALLY INJECT SUSFS KCONFIG IF PATCH FAILED
-          # (Ini mencegah error "CONFIG_KSU_SUSFS tidak aktif" di Kbuild)
-          # ---------------------------------------------------------
-          if ! grep -q "KSU_SUSFS" fs/Kconfig; then
-            echo "[!] Menyuntikkan konfigurasi SuSFS ke fs/Kconfig secara manual..."
-            cat >> fs/Kconfig << 'EOF'
-
-          config KSU_SUSFS
-              bool "KSU SUSFS"
-              default y
-          config KSU_SUSFS_SUS_PATH
-              bool "SU Hide Path"
-              default y
-          config KSU_SUSFS_SUS_MOUNT
-              bool "SU Hide Mount"
-              default y
-          config KSU_SUSFS_SUS_KSTAT
-              bool "SU Hide Kstat"
-              default y
-          config KSU_SUSFS_SPOOF_UNAME
-              bool "SU Spoof Uname"
-              default y
-          config KSU_SUSFS_ENABLE_LOG
-              bool "SU SUSFS Log"
-              default y
-          config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-              bool "SU Hide Symbols"
-              default n
-          config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-              bool "SU Spoof Cmdline"
-              default y
-          config KSU_SUSFS_OPEN_REDIRECT
-              bool "SU Open Redirect"
-              default y
-          config KSU_SUSFS_SUS_MAP
-              bool "SU Sus Map"
-              default y
-          EOF
-          fi
-
-          if ! grep -q "susfs" fs/Makefile; then
-            echo "[!] Menyuntikkan Makefile SuSFS ke fs/Makefile secara manual..."
-            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o sus_export.o" >> fs/Makefile
-          fi
 
           # FIX (ReSukiSU only): Wire manual sel_handle_status_ops ke .open
           if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
@@ -310,57 +264,63 @@ jobs:
         run: |
           set -euo pipefail
           cd "$CONFIG"
-          cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
-          CONFIG_NOMOUNT=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_IP_NF_TARGET_TTL=y
-          CONFIG_IP6_NF_TARGET_HL=y
-          CONFIG_IP6_NF_MATCH_HL=y
-          CONFIG_NET_ACT_CONNMARK=y
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_MAX=65534
-          CONFIG_IP_SET_BITMAP_IP=y
-          CONFIG_IP_SET_BITMAP_IPMAC=y
-          CONFIG_IP_SET_BITMAP_PORT=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_IPMARK=y
-          CONFIG_IP_SET_HASH_IPPORT=y
-          CONFIG_IP_SET_HASH_IPPORTIP=y
-          CONFIG_IP_SET_HASH_IPPORTNET=y
-          CONFIG_IP_SET_HASH_IPMAC=y
-          CONFIG_IP_SET_HASH_MAC=y
-          CONFIG_IP_SET_HASH_NETPORTNET=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_IP_SET_HASH_NETNET=y
-          CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_IP_SET_LIST_SET=y
-          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
-          CONFIG_NETFILTER_XT_SET=y
-          CONFIG_NETFILTER_XT_TARGET_LOG=y
-          CONFIG_NETFILTER_XT_MATCH_RECENT=y
-          CONFIG_IP6_NF_NAT=y
-          CONFIG_IP6_NF_TARGET_MASQUERADE=y
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_TCP_CONG_BBR3=y
-          CONFIG_TCP_CONG_CUBIC=y
-          CONFIG_TCP_CONG_BIC=y
-          CONFIG_TCP_CONG_WESTWOOD=y
-          CONFIG_TCP_CONG_HTCP=y
-          CONFIG_DEFAULT_BBR3=y
-          CONFIG_DEFAULT_TCP_CONG="bbr3"
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_NET_SCH_CAKE=y
-          CONFIG_NETWORK_FILESYSTEMS=y
-          CONFIG_NETFS_SUPPORT=y
-          CONFIG_KEYS=y
-          CONFIG_CIFS=y
-          CONFIG_CIFS_XATTR=y
-          CONFIG_CIFS_POSIX=y
-          EOF
+          
+          # ---------------------------------------------------------
+          # MANUALLY INJECT DEFCONFIG MENGGUNAKAN BLOK ECHO
+          # (Mencegah YAML menambahkan spasi di depan kata "CONFIG_")
+          # ---------------------------------------------------------
+          {
+            echo "CONFIG_NOMOUNT=y"
+            echo "CONFIG_TMPFS_XATTR=y"
+            echo "CONFIG_TMPFS_POSIX_ACL=y"
+            echo "CONFIG_IP_NF_TARGET_TTL=y"
+            echo "CONFIG_IP6_NF_TARGET_HL=y"
+            echo "CONFIG_IP6_NF_MATCH_HL=y"
+            echo "CONFIG_NET_ACT_CONNMARK=y"
+            echo "CONFIG_IP_SET=y"
+            echo "CONFIG_IP_SET_MAX=65534"
+            echo "CONFIG_IP_SET_BITMAP_IP=y"
+            echo "CONFIG_IP_SET_BITMAP_IPMAC=y"
+            echo "CONFIG_IP_SET_BITMAP_PORT=y"
+            echo "CONFIG_IP_SET_HASH_IP=y"
+            echo "CONFIG_IP_SET_HASH_IPMARK=y"
+            echo "CONFIG_IP_SET_HASH_IPPORT=y"
+            echo "CONFIG_IP_SET_HASH_IPPORTIP=y"
+            echo "CONFIG_IP_SET_HASH_IPPORTNET=y"
+            echo "CONFIG_IP_SET_HASH_IPMAC=y"
+            echo "CONFIG_IP_SET_HASH_MAC=y"
+            echo "CONFIG_IP_SET_HASH_NETPORTNET=y"
+            echo "CONFIG_IP_SET_HASH_NET=y"
+            echo "CONFIG_IP_SET_HASH_NETNET=y"
+            echo "CONFIG_IP_SET_HASH_NETPORT=y"
+            echo "CONFIG_IP_SET_HASH_NETIFACE=y"
+            echo "CONFIG_IP_SET_LIST_SET=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y"
+            echo "CONFIG_NETFILTER_XT_SET=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_LOG=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_RECENT=y"
+            echo "CONFIG_IP6_NF_NAT=y"
+            echo "CONFIG_IP6_NF_TARGET_MASQUERADE=y"
+            echo "CONFIG_TCP_CONG_ADVANCED=y"
+            echo "CONFIG_TCP_CONG_BBR=y"
+            echo "CONFIG_TCP_CONG_BBR3=y"
+            echo "CONFIG_TCP_CONG_CUBIC=y"
+            echo "CONFIG_TCP_CONG_BIC=y"
+            echo "CONFIG_TCP_CONG_WESTWOOD=y"
+            echo "CONFIG_TCP_CONG_HTCP=y"
+            echo "CONFIG_DEFAULT_BBR3=y"
+            echo "CONFIG_DEFAULT_TCP_CONG=\"bbr3\""
+            echo "CONFIG_NET_SCH_FQ=y"
+            echo "CONFIG_NET_SCH_FQ_CODEL=y"
+            echo "CONFIG_NET_SCH_CAKE=y"
+            echo "CONFIG_NETWORK_FILESYSTEMS=y"
+            echo "CONFIG_NETFS_SUPPORT=y"
+            echo "CONFIG_KEYS=y"
+            echo "CONFIG_CIFS=y"
+            echo "CONFIG_CIFS_XATTR=y"
+            echo "CONFIG_CIFS_POSIX=y"
+          } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+
           sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
           sed -i '/echo "+"$/d' scripts/setlocalversion
