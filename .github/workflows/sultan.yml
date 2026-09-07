@@ -147,6 +147,11 @@ jobs:
           # Pastikan KPROBES dapat aktif pada Sultan kernel (yang memakai CONFIG_INTEGRATE_MODULES=y)
           sed -i 's/depends on MODULES/depends on MODULES || INTEGRATE_MODULES/g' arch/Kconfig 2>/dev/null || true
 
+          # Sediakan stub module_state dan find_module di include/linux/module.h untuk konfigurasi !CONFIG_MODULES (Sultan kernel)
+          if ! grep -q "MODULE_STATE_COMING_STUB" include/linux/module.h 2>/dev/null; then
+            sed -i '/#else\([[:space:]]*\/\*[[:space:]]*!\?CONFIG_MODULES\|\s*$\)/a #ifndef MODULE_STATE_COMING_STUB\nenum module_state { MODULE_STATE_LIVE, MODULE_STATE_COMING, MODULE_STATE_GOING, MODULE_STATE_UNFORMED };\nstruct module { enum module_state state; unsigned long kprobes_text_start; unsigned int kprobes_text_size; unsigned long noinstr_text_start; unsigned int noinstr_text_size; int num_kprobe_blacklist; unsigned long *kprobe_blacklist; };\nstatic inline struct module *find_module(const char *name) { return NULL; }\n#define MODULE_STATE_COMING_STUB\n#endif' include/linux/module.h 2>/dev/null || true
+          fi
+
 
           # Hindari call security_add_hooks di runtime (device_initcall) pada ReSukiSU yang memicu panic di Linux 6.1
           for f in drivers/kernelsu/hook/lsm_hooks.c KernelSU/kernel/hook/lsm_hooks.c; do
@@ -372,7 +377,7 @@ jobs:
             echo "CONFIG_KPROBES=y"
             echo "CONFIG_HAVE_KPROBES=y"
             echo "CONFIG_KRETPROBES=y"
-            echo "CONFIG_KPROBE_EVENTS=y"
+            echo "# CONFIG_KPROBE_EVENTS is not set"
             echo "CONFIG_THREAD_INFO_IN_TASK=y"
             echo "CONFIG_DEBUG_KERNEL=y"
             echo "CONFIG_KALLSYMS=y"
@@ -427,7 +432,7 @@ jobs:
             -e CONFIG_KPROBES \
             -e CONFIG_HAVE_KPROBES \
             -e CONFIG_KRETPROBES \
-            -e CONFIG_KPROBE_EVENTS \
+            -d CONFIG_KPROBE_EVENTS \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -485,6 +490,7 @@ jobs:
           if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
             echo "::warning::CONFIG_KALLSYMS_ALL tidak aktif, menginjeksi langsung ke $CONFIG_FILE..."
             ./scripts/config --file "$CONFIG_FILE" -e CONFIG_DEBUG_KERNEL -e CONFIG_KALLSYMS -e CONFIG_KALLSYMS_ALL
+            make $MAKE_ARGS olddefconfig
           fi
           if [ $MISSING -eq 1 ]; then
             grep -i "ksu" /tmp/olddefconfig.log || true
