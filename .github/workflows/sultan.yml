@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
 
       - name: Download and extract ZyC Clang (Streamed)
         shell: bash
@@ -66,7 +66,10 @@ jobs:
           echo "Fetching latest ZyC-Clang..."
           mkdir -p $GITHUB_WORKSPACE/clang
           CLANG_URL=$(curl -s https://api.github.com/repos/ZyCromerZ/Clang/releases/latest | grep "browser_download_url" | grep "tar.gz" | head -n 1 | cut -d '"' -f 4)
-          curl -fsSL "$CLANG_URL" | tar -xz -C $GITHUB_WORKSPACE/clang --strip-components=1
+          curl -fsSL "$CLANG_URL" | tar -xz -C $GITHUB_WORKSPACE/clang
+          chmod +x $GITHUB_WORKSPACE/clang/bin/* 2>/dev/null || true
+          $GITHUB_WORKSPACE/clang/bin/clang --version
+          $GITHUB_WORKSPACE/clang/bin/ld.lld --version
 
       - name: Set up Zig Compiler
         uses: jetsung/setup-zig@v0.0.4
@@ -163,6 +166,13 @@ jobs:
           fi
           if ! grep -q 'kernelsu' drivers/Makefile; then
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          fi
+
+          if [ -f drivers/kernelsu/Makefile ]; then
+            echo "subdir-ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Makefile
+          fi
+          if [ -f drivers/kernelsu/Kbuild ]; then
+            echo "ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Kbuild
           fi
 
           # Pastikan patch_memory.o selalu terkompilasi meskipun CONFIG_KPROBES dimatikan (Sultan kernel)
@@ -401,6 +411,12 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          if [ -d "$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin" ]; then
+            export PATH="$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin:$PATH"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/clang/arm-linux-gnueabi/bin" ]; then
+            export PATH="$GITHUB_WORKSPACE/clang/arm-linux-gnueabi/bin:$PATH"
+          fi
           MAKE_ARGS="LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-"
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
