@@ -173,6 +173,37 @@ jobs:
           fi
           grep -n -B1 -A4 '^config KSU$' "$KSU_KCONFIG"
 
+      - name: Fix KSU Link for Sultan (su-fd shim + task_stack include)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+          KSU_DIR="drivers/kernelsu"
+          SC="$KSU_DIR/supercall/supercall.c"
+          KB="$KSU_DIR/Kbuild"
+          # 1. ksu_install_su_fd shim — susfs fs/exec.c hook memanggilnya
+          #    (upstream KernelSU PR #3679), tetapi tree ini belum tentu punya.
+          #    Jika sudah ada -> lewati. Jika ada ksu_install_fd (signature
+          #    identik; bit permission tak punya konsumen di tree ini) -> alias.
+          if grep -qE '^int[[:space:]]+ksu_install_su_fd[[:space:]]*\(' "$SC"; then
+            echo "[*] ksu_install_su_fd sudah didefinisikan; shim dilewati."
+          elif grep -qE '^int[[:space:]]+ksu_install_fd[[:space:]]*\(' "$SC"; then
+            printf '\n/* Sultan CI compat: susfs exec hook needs ksu_install_su_fd. */\nint ksu_install_su_fd(void)\n{\n\treturn ksu_install_fd();\n}\n' >> "$SC"
+            echo "[+] shim ksu_install_su_fd ditambahkan ke $SC"
+          else
+            echo "::warning::ksu_install_su_fd maupun ksu_install_fd tak ditemukan di $SC; link bisa gagal."
+          fi
+          # 2. task_stack_page(): static inline di task_stack.h, tetapi tak semua
+          #    TU yang mengembangkannya via rantai makro meng-include header itu;
+          #    tanpa definisi inline, link relocatable arm64 gagal + ASSERT GOT/PLT
+          #    di vmlinux.lds.S menembak. -include menjamin definisi di semua TU.
+          if grep -qF -- '-include linux/sched/task_stack.h' "$KB"; then
+            echo "[*] -include task_stack.h sudah ada di $KB."
+          else
+            printf '\n# Sultan CI: guarantee task_stack_page() inline in every TU.\nccflags-y += -include linux/sched/task_stack.h\n' >> "$KB"
+            echo "[+] -include task_stack.h ditambahkan ke $KB"
+          fi
+
       - name: Apply SUSFS Patches
         shell: bash
         run: |
