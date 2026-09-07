@@ -164,14 +164,22 @@ jobs:
           fi
 
           if [ -f drivers/kernelsu/Makefile ]; then
-            echo "subdir-ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Makefile
+            echo "subdir-ccflags-y += -Wno-designated-init -Wno-error=designated-init -Wno-unused-value -Wno-error=unused-value" >> drivers/kernelsu/Makefile
           fi
           if [ -f drivers/kernelsu/Kbuild ]; then
-            echo "ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Kbuild
+            echo "ccflags-y += -Wno-designated-init -Wno-error=designated-init -Wno-unused-value -Wno-error=unused-value" >> drivers/kernelsu/Kbuild
           fi
           for kb in drivers/kernelsu/Kbuild KernelSU/kernel/Kbuild KernelSU-Next/kernel/Kbuild; do
             if [ -f "$kb" ]; then
               sed -i 's/-Wno-gcc-compat//g' "$kb" 2>/dev/null || true
+            fi
+          done
+
+          # Fix macro ksu_flush_icache pada patch_memory.c yang tidak menyertakan argumen fungsi
+          for pm in drivers/kernelsu/hook/arm64/patch_memory.c KernelSU/kernel/hook/arm64/patch_memory.c KernelSU-Next/kernel/hook/arm64/patch_memory.c; do
+            if [ -f "$pm" ]; then
+              sed -i 's/#define ksu_flush_icache(start, end) caches_clean_inval_pou$/#define ksu_flush_icache(start, end) caches_clean_inval_pou(start, end)/g' "$pm"
+              sed -i 's/#define ksu_flush_icache(start, end) __flush_icache_range$/#define ksu_flush_icache(start, end) __flush_icache_range(start, end)/g' "$pm"
             fi
           done
 
@@ -413,7 +421,7 @@ jobs:
 
           TOOLCHAIN_PREFIX="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
           CC_COMPILER="${TOOLCHAIN_PREFIX}gcc"
-          export KCFLAGS="-Wno-error=designated-init -Wno-designated-init"
+          export KCFLAGS="-Wno-error=designated-init -Wno-designated-init -Wno-unused-value -Wno-error=unused-value"
           MAKE_ARGS="CC=$CC_COMPILER CROSS_COMPILE=$TOOLCHAIN_PREFIX"
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
