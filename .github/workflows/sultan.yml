@@ -7,8 +7,9 @@ on:
   workflow_call:
     inputs:
       repo:
-        required: true
+        required: false
         type: string
+        default: ""
       codename:
         required: true
         type: string
@@ -35,21 +36,11 @@ jobs:
           sudo docker image prune --all --force
           echo "[+] Disk space cleaned up"
 
-      - name: Install CCache & Essential Build Tools
+      - name: Install Essential Build Tools
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ccache libssl-dev libelf-dev bc bison flex perl
-          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> "$GITHUB_ENV"
-
-      - name: Setup CCache Cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.ccache
-          key: ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-${{ github.sha }}
-          restore-keys: |
-            ccache-gcc-${{ inputs.codename }}-${{ matrix.variant }}-
-            ccache-gcc-${{ inputs.codename }}-
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4
 
       - name: Download and extract GCC 14.2.0 (Streamed)
         shell: bash
@@ -76,7 +67,6 @@ jobs:
           set -euo pipefail
           echo "[+] Cloning dependencies in parallel..."
           git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" &
-          git clone --depth=1 https://github.com/bhazheng/Sultan_KernelSU_SUSFS.git kernel_patches_new &
 
           # Repositori kernel wajib di-clone penuh (tanpa --depth=1)
           git clone https://github.com/bhazheng/android_kernel_google_tensynos &
@@ -108,32 +98,24 @@ jobs:
           }
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            KSU_INPUT="dev-susfs"
-
+            echo "[+] Adding KernelSU-Next (pershoot dev-susfs)..."
             curl -LSs --retry 5 --retry-delay 5 --retry-all-errors \
               "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" \
               | bash -s dev-susfs
+          fi
 
-            retry git -C KernelSU-Next/kernel fetch --depth=50 origin "$KSU_INPUT" || true
-            git -C KernelSU-Next/kernel checkout "$KSU_INPUT" || true
+          if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
+            echo "[+] Cloning ReSukiSU (shallow ala root-setup)..."
+            rm -rf KernelSU drivers/kernelsu
+            git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git -b main KernelSU
+            ln -sf "$(realpath --relative-to="drivers" "KernelSU/kernel")" "drivers/kernelsu"
 
-            # Penambatan versi presisi
-            cd KernelSU-Next/kernel
-            BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD | sed 's:-.*::' 2>/dev/null)
-            BASE_COMMIT=$(git merge-base HEAD refs/remotes/origin/$BASE_BRANCH 2>/dev/null || git merge-base HEAD refs/remotes/origin/main 2>/dev/null || echo HEAD)
-            COMMITS_COUNT=$(/usr/bin/git rev-list --count "$BASE_COMMIT")
-            BASE_VERSION=30000
-            KSU_VERSION=$(expr "$COMMITS_COUNT" + "$BASE_VERSION")
-            sed -i "s/^KSU_VERSION_FALLBACK := 1$/KSU_VERSION_FALLBACK := ${KSU_VERSION}/" Kbuild
-            KSU_GIT_TAG="$(git describe --tags --abbrev=0 "$BASE_COMMIT" 2>/dev/null || echo "v0.0.1")"
-            sed -i "s/^KSU_VERSION_TAG_FALLBACK := v0.0.1$/KSU_VERSION_TAG_FALLBACK := ${KSU_GIT_TAG}/" Kbuild
-            cd ../../
-
-          elif [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
-            echo "[+] Installing ReSukiSU..."
-            curl -LSs --retry 5 --retry-delay 5 --retry-all-errors \
-              "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
-              | bash
+            # Fix undefined reference to task_stack_page pada ARM64 link (adb_root.c memanggil current_user_stack_pointer tanpa task_stack.h)
+            for f in drivers/kernelsu/feature/adb_root.c KernelSU/kernel/feature/adb_root.c drivers/kernelsu/include/arch.h KernelSU/kernel/include/arch.h; do
+              if [ -f "$f" ] && ! grep -q "<linux/sched/task_stack.h>" "$f"; then
+                sed -i '1i #include <linux/sched/task_stack.h>' "$f" || true
+              fi
+            done
 
             # Stub fungsi legacy aman indentasi
             if ! grep -rq "^int ksu_install_su_fd" drivers/kernelsu/feature/sucompat.c 2>/dev/null; then
@@ -153,22 +135,11 @@ jobs:
             grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c || true
           fi
 
-          # Terapkan static.patch HANYA untuk KernelSU-Next
-          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Applying static.patch for KernelSU-Next..."
-            curl -fsSL --retry 3 \
-              "https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/refs/heads/main/.github/actions/kernelsu/patches/static.patch" \
-              -o static.patch
-            patch -p2 -d "drivers/kernelsu" < static.patch || true
-            rm -f static.patch
-          fi
-
-          # Registrasi Aman ke Kconfig dan Makefile root
-          sed -i '/kernelsu/d' drivers/Kconfig
-          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-          
-          sed -i '/kernelsu/d' drivers/Makefile
-          echo "obj-y += kernelsu/" >> drivers/Makefile
+          # Pastikan registrasi ke Kconfig dan Makefile rapi
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          grep -q 'kernelsu' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
 
           # Validasi
           test -e drivers/kernelsu
@@ -186,14 +157,6 @@ jobs:
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
           patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
-
-          # FIX (ReSukiSU only): Wire manual sel_handle_status_ops ke .open
-          if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
-            if grep -q "my_sel_open_handle_status(struct inode" security/selinux/selinuxfs.c 2>/dev/null \
-              && grep -q "\.open[[:space:]]*= sel_open_handle_status" security/selinux/selinuxfs.c 2>/dev/null; then
-              perl -0pi -e 's/\t\.open\t\t= sel_open_handle_status,\n/#ifdef CONFIG_KSU_SUSFS\n\t.open\t\t= my_sel_open_handle_status,\n#else\n\t.open\t\t= sel_open_handle_status,\n#endif \/\/ #ifdef CONFIG_KSU_SUSFS\n/' security/selinux/selinuxfs.c
-            fi
-          fi
 
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -332,22 +295,18 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          mkdir -p out
-          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
-          export CC="ccache $GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc"
+          TOOLCHAIN_PREFIX="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
+          CC_COMPILER="${TOOLCHAIN_PREFIX}gcc"
           export ARCH=arm64
           export SUBARCH=arm64
-          export CCACHE_NOHASHDIR=true
-          export CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,locale
-          ccache -M 15G && ccache -o compression=true && ccache -o compression_level=1 && ccache -s
           touch arch/arm64/configs/${{ inputs.codename }}_defconfig
 
-          # 1. Defconfig dasar
-          make O=out -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          # 1. Defconfig dasar (in-tree)
+          make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" -j$(nproc --all) ${{ inputs.codename }}_defconfig
 
           # 2. Injeksi mutlak konfigurasi KSU dan Kprobes
           # FITUR KPROBES SENGAJA DIHILANGKAN SESUAI SETELAN ORI SULTAN
-          ./scripts/config --file out/.config \
+          ./scripts/config --file .config \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -366,16 +325,16 @@ jobs:
             -e CONFIG_FUSE_FS \
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
-          
-          make O=out olddefconfig 2>&1 | tee /tmp/olddefconfig.log
+
+          make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
           echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
           MISSING=0
-          if ! grep -q "^CONFIG_KSU=y" out/.config; then
+          if ! grep -q "^CONFIG_KSU=y" .config; then
             echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
             MISSING=1
           fi
-          if ! grep -q "^CONFIG_KSU_SUSFS=y" out/.config; then
+          if ! grep -q "^CONFIG_KSU_SUSFS=y" .config; then
             echo "::error::CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
             MISSING=1
           fi
@@ -384,28 +343,40 @@ jobs:
             exit 1
           fi
 
-          # 3. Kompilasi Paralel
-          make O=out LOCALVERSION_AUTO=0 -j$(nproc --all) || {
+          # 3. Kompilasi Paralel (in-tree)
+          make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
-            make O=out LOCALVERSION_AUTO=0 -j1
+            make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
             exit 1
           }
-          ccache -s
 
       - name: Copy Images & Create ZIP
         shell: bash
         run: |
           set -euo pipefail
           cd "$CONFIG"
-          cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
-
-          if [ "${{ inputs.codename }}" == "gs201" ]; then
-             cat ./out/google-devices/gs201/dts/*.dtb > ../AnyKernel3/dtb
-          elif [ "${{ inputs.codename }}" == "zuma" ]; then
-             cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb
-          elif [ "${{ inputs.codename }}" == "zumapro" ]; then
-             cat ./out/google-devices/zumapro/dts/*.dtb > ../AnyKernel3/dtb
+          if [ -f ./arch/arm64/boot/Image.lz4 ]; then
+            cp ./arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
+          elif [ -f ./arch/arm64/boot/Image ]; then
+            lz4 -9 -f ./arch/arm64/boot/Image ../AnyKernel3/Image.lz4
+          elif [ -f ./out/arch/arm64/boot/Image.lz4 ]; then
+            cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
+          elif [ -f ./out/arch/arm64/boot/Image ]; then
+            lz4 -9 -f ./out/arch/arm64/boot/Image ../AnyKernel3/Image.lz4
           fi
+
+          DTB_FOUND=0
+          for dtb_dir in "./google-devices/${{ inputs.codename }}/dts" "./arch/arm64/boot/dts/google-devices/${{ inputs.codename }}/dts" "./out/google-devices/${{ inputs.codename }}/dts"; do
+            if compgen -G "${dtb_dir}/*.dtb" > /dev/null; then
+              cat ${dtb_dir}/*.dtb > ../AnyKernel3/dtb
+              DTB_FOUND=1
+              break
+            fi
+          done
+          if [ $DTB_FOUND -eq 0 ] && compgen -G "./arch/arm64/boot/dts/*.dtb" > /dev/null; then
+            cat ./arch/arm64/boot/dts/*.dtb > ../AnyKernel3/dtb
+          fi
+
           cd ../AnyKernel3
           ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan.zip"
           zip -qr "../$ZIP_NAME" ./*
@@ -427,6 +398,43 @@ jobs:
           | **SHA-256** | \`${{ env.ZIP_SHA }}\` |
           EOF
 
+      - name: Fetch Manager APK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          python3 - << 'EOF'
+          import os, json, urllib.request
+
+          token = os.environ.get("GH_TOKEN", "")
+          headers = {"User-Agent": "Mozilla/5.0"}
+          if token:
+              headers["Authorization"] = f"token {token}"
+
+          variant = os.environ.get("VARIANT", "")
+          repo = "ReSukiSU/ReSukiSU" if variant == "ReSukiSU" else "KernelSU-Next/KernelSU-Next"
+
+          try:
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=1", headers=headers)
+              with urllib.request.urlopen(req) as resp:
+                  releases = json.loads(resp.read().decode("utf-8"))
+              if releases:
+                  assets = releases[0].get("assets", [])
+                  apks = [a for a in assets if a["name"].endswith(".apk")]
+                  if variant == "ReSukiSU":
+                      universal = [a for a in apks if "universal" in a["name"].lower() and "debug" not in a["name"].lower()]
+                      if universal:
+                          apks = universal
+                  for a in apks:
+                      print(f"[+] Downloading {a['name']} from {repo}...")
+                      urllib.request.urlretrieve(a["browser_download_url"], a["name"])
+          except Exception as e:
+              print(f"[!] Warning: Failed to fetch manager APK: {e}")
+          EOF
+
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -434,6 +442,7 @@ jobs:
           path: |
             ${{ github.workspace }}/*.zip
             ${{ github.workspace }}/*.sha256
+            ${{ github.workspace }}/*.apk
             !${{ github.workspace }}/NoMount-*.zip
             !${{ github.workspace }}/NoMount-*.sha256
 
