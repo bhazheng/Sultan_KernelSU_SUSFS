@@ -148,6 +148,31 @@ jobs:
             exit 1
           }
 
+      - name: Fix KernelSU-Next Kconfig for Sultan (tanpa KPROBES)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.variant }}" != "KernelSU-Next" ]; then
+            echo "[*] Varian ${{ matrix.variant }}: tidak perlu perbaikan Kconfig."
+            exit 0
+          fi
+          cd "$CONFIG"
+          KSU_KCONFIG="drivers/kernelsu/Kconfig"
+          # pershoot dev-susfs: `config KSU` membawa `depends on KPROBES || SUSFS`,
+          # tetapi simbol `SUSFS` (tanpa prefix) tidak pernah didefinisikan di mana pun
+          # (= n), dan Sultan tak bisa mengaktifkan KPROBES (INTEGRATE_MODULES=y
+          # mematikan MODULES). Tanpa perbaikan, olddefconfig ikut mencoret CONFIG_KSU.
+          # SUSFS inline hook tidak butuh kprobe (sesuai help text simbol KSU sendiri),
+          # jadi baris depends tersebut dihapus — sama seperti yang dilakukan
+          # 10_enable_susfs_for_ksu.patch terhadap `depends on KPROBES && EXT4_FS`.
+          if grep -q 'depends on KPROBES || SUSFS' "$KSU_KCONFIG"; then
+            sed -i '/depends on KPROBES || SUSFS/d' "$KSU_KCONFIG"
+            echo "[+] Baris depends KPROBES||SUSFS dihapus dari $KSU_KCONFIG"
+          else
+            echo "[*] Pola tidak ditemukan (mungkin upstream sudah diperbaiki); isi blok KSU saat ini:"
+          fi
+          grep -n -B1 -A4 '^config KSU$' "$KSU_KCONFIG"
+
       - name: Apply SUSFS Patches
         shell: bash
         run: |
@@ -307,6 +332,8 @@ jobs:
             # selalu mencoretnya. Kedua varian KSU tidak butuh KPROBES karena
             # memakai SUSFS inline hook (KernelSU-Next: `depends on KPROBES || SUSFS`;
             # ReSukiSU: choice KSU_SUSFS). Jangan mengembalikan baris KPROBES di sini.
+            # (Varian KernelSU-Next juga ditangani langkah "Fix KernelSU-Next Kconfig
+            # for Sultan" yang menghapus depends bogus itu dari drivers/kernelsu/Kconfig.)
             echo "CONFIG_THREAD_INFO_IN_TASK=y"
             echo "CONFIG_DEBUG_KERNEL=y"
             echo "CONFIG_KALLSYMS=y"
