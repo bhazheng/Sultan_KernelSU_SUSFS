@@ -282,6 +282,24 @@ jobs:
             echo "CONFIG_CIFS=y"
             echo "CONFIG_CIFS_XATTR=y"
             echo "CONFIG_CIFS_POSIX=y"
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_KSU_SUSFS=y"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
+            echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set"
+            echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
+            echo "CONFIG_THREAD_INFO_IN_TASK=y"
+            echo "CONFIG_KALLSYMS=y"
+            echo "CONFIG_KALLSYMS_ALL=y"
+            echo "CONFIG_OVERLAY_FS=y"
+            echo "CONFIG_FUSE_FS=y"
+            echo "CONFIG_BPF_SYSCALL=y"
+            echo "CONFIG_FUSE_BPF=y"
           } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
 
           sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
@@ -299,14 +317,21 @@ jobs:
           CC_COMPILER="${TOOLCHAIN_PREFIX}gcc"
           export ARCH=arm64
           export SUBARCH=arm64
-          touch arch/arm64/configs/${{ inputs.codename }}_defconfig
 
-          # 1. Defconfig dasar (in-tree)
+          # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
+          rm -f .config
+
+          # 1. Defconfig dasar (Sultan Makefile otomatis mengarahkan output build ke out/)
           make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" -j$(nproc --all) ${{ inputs.codename }}_defconfig
 
-          # 2. Injeksi mutlak konfigurasi KSU dan Kprobes
-          # FITUR KPROBES SENGAJA DIHILANGKAN SESUAI SETELAN ORI SULTAN
-          ./scripts/config --file .config \
+          # Deteksi file config aktif (Sultan Makefile menaruhnya di out/.config)
+          CONFIG_FILE="out/.config"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            CONFIG_FILE=".config"
+          fi
+
+          # 2. Injeksi mutlak konfigurasi KSU dan Kprobes ke target config yang aktif
+          ./scripts/config --file "$CONFIG_FILE" \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -326,15 +351,20 @@ jobs:
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
 
+          # Pastikan tidak ada file .config di root source tree sebelum make dipanggil
+          if [ "$CONFIG_FILE" != ".config" ]; then
+            rm -f .config
+          fi
+
           make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
           echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
           MISSING=0
-          if ! grep -q "^CONFIG_KSU=y" .config; then
+          if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
             echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
             MISSING=1
           fi
-          if ! grep -q "^CONFIG_KSU_SUSFS=y" .config; then
+          if ! grep -q "^CONFIG_KSU_SUSFS=y" "$CONFIG_FILE"; then
             echo "::error::CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
             MISSING=1
           fi
@@ -343,7 +373,7 @@ jobs:
             exit 1
           fi
 
-          # 3. Kompilasi Paralel (in-tree)
+          # 3. Kompilasi Paralel
           make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
             make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
@@ -355,26 +385,35 @@ jobs:
         run: |
           set -euo pipefail
           cd "$CONFIG"
-          if [ -f ./arch/arm64/boot/Image.lz4 ]; then
-            cp ./arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
-          elif [ -f ./arch/arm64/boot/Image ]; then
-            lz4 -9 -f ./arch/arm64/boot/Image ../AnyKernel3/Image.lz4
-          elif [ -f ./out/arch/arm64/boot/Image.lz4 ]; then
+          if [ -f ./out/arch/arm64/boot/Image.lz4 ]; then
             cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           elif [ -f ./out/arch/arm64/boot/Image ]; then
             lz4 -9 -f ./out/arch/arm64/boot/Image ../AnyKernel3/Image.lz4
+          elif [ -f ./arch/arm64/boot/Image.lz4 ]; then
+            cp ./arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
+          elif [ -f ./arch/arm64/boot/Image ]; then
+            lz4 -9 -f ./arch/arm64/boot/Image ../AnyKernel3/Image.lz4
           fi
 
           DTB_FOUND=0
-          for dtb_dir in "./google-devices/${{ inputs.codename }}/dts" "./arch/arm64/boot/dts/google-devices/${{ inputs.codename }}/dts" "./out/google-devices/${{ inputs.codename }}/dts"; do
+          for dtb_dir in "./out/google-devices/${{ inputs.codename }}/dts" "./out/arch/arm64/boot/dts" "./google-devices/${{ inputs.codename }}/dts" "./arch/arm64/boot/dts/google-devices/${{ inputs.codename }}/dts" "./arch/arm64/boot/dts"; do
             if compgen -G "${dtb_dir}/*.dtb" > /dev/null; then
               cat ${dtb_dir}/*.dtb > ../AnyKernel3/dtb
               DTB_FOUND=1
               break
             fi
           done
-          if [ $DTB_FOUND -eq 0 ] && compgen -G "./arch/arm64/boot/dts/*.dtb" > /dev/null; then
-            cat ./arch/arm64/boot/dts/*.dtb > ../AnyKernel3/dtb
+          if [ $DTB_FOUND -eq 0 ]; then
+            find out -name "*.dtb" -exec cat {} + > ../AnyKernel3/dtb 2>/dev/null || true
+          fi
+
+          if [ ! -f ../AnyKernel3/Image.lz4 ]; then
+            echo "::error::Image.lz4 tidak ditemukan!"
+            exit 1
+          fi
+          if [ ! -s ../AnyKernel3/dtb ]; then
+            echo "::error::dtb tidak ditemukan atau kosong!"
+            exit 1
           fi
 
           cd ../AnyKernel3
