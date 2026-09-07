@@ -107,7 +107,8 @@ jobs:
           if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
             echo "[+] Cloning ReSukiSU (shallow ala root-setup)..."
             rm -rf KernelSU drivers/kernelsu
-            git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git -b main KernelSU
+            retry git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git -b main KernelSU
+            git -C KernelSU fetch --unshallow || true
             ln -sf "$(realpath --relative-to="drivers" "KernelSU/kernel")" "drivers/kernelsu"
 
             # Fix undefined reference to task_stack_page pada ARM64 link (adb_root.c memanggil current_user_stack_pointer tanpa task_stack.h)
@@ -117,32 +118,37 @@ jobs:
               fi
             done
 
-            # Stub fungsi legacy aman indentasi
-            if ! grep -rq "^int ksu_install_su_fd" drivers/kernelsu/feature/sucompat.c 2>/dev/null; then
-              {
-                echo ""
-                echo "#ifdef CONFIG_KSU_SUSFS"
-                echo "int ksu_install_su_fd(void)"
-                echo "{"
-                echo "    return 0;"
-                echo "}"
-                echo "#endif"
-              } >> drivers/kernelsu/feature/sucompat.c
-            fi
-            
-            # Export simbol untuk keamanan
-            sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c || true
-            grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c 2>/dev/null || echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c || true
           fi
 
+          # Hapus dependensi KPROBES yang menggugurkan CONFIG_KSU saat olddefconfig (Sultan kernel menonaktifkan Kprobes)
+          for kc in drivers/kernelsu/Kconfig KernelSU/kernel/Kconfig KernelSU-Next/kernel/Kconfig; do
+            if [ -f "$kc" ]; then
+              sed -i '/depends on.*KPROBES/d' "$kc" || true
+              sed -i 's/depends on KPROBES || SUSFS//g' "$kc" || true
+              sed -i 's/depends on KPROBES && EXT4_FS//g' "$kc" || true
+              sed -i 's/depends on KPROBES//g' "$kc" || true
+              sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/g' "$kc" || true
+            fi
+          done
+
           # Pastikan registrasi ke Kconfig dan Makefile rapi
-          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          grep -q 'kernelsu' drivers/Makefile || \
+          if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
+            sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+          if ! grep -q 'kernelsu' drivers/Makefile; then
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          fi
 
           # Validasi
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || {
+            echo "::error::Gagal mendaftarkan drivers/kernelsu/Kconfig ke drivers/Kconfig!"
+            exit 1
+          }
           test -e drivers/kernelsu
+          test -f drivers/kernelsu/Kconfig || {
+            echo "::error::File drivers/kernelsu/Kconfig tidak ditemukan!"
+            exit 1
+          }
 
       - name: Apply SUSFS Patches
         shell: bash
@@ -157,6 +163,7 @@ jobs:
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
           patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/TheWildJames/kernel_patches/main/sultan/sys.c_fix.patch | patch -p1 || true
 
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -302,6 +309,14 @@ jobs:
             echo "CONFIG_FUSE_BPF=y"
           } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
 
+          if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
+            {
+              echo "# CONFIG_KSU_TRACEPOINT_HOOK is not set"
+              echo "# CONFIG_KSU_MANUAL_HOOK is not set"
+              echo "CONFIG_KSU_SUSFS=y"
+            } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+          fi
+
           sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
           sed -i '/echo "+"$/d' scripts/setlocalversion
@@ -351,12 +366,25 @@ jobs:
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
 
+          if [ "${{ matrix.variant }}" == "ReSukiSU" ]; then
+            ./scripts/config --file "$CONFIG_FILE" \
+              -d CONFIG_KSU_TRACEPOINT_HOOK \
+              -d CONFIG_KSU_MANUAL_HOOK \
+              -e CONFIG_KSU_SUSFS
+          fi
+
+          echo "=== CONFIG_KSU sebelum olddefconfig ==="
+          grep -E "^CONFIG_KSU" "$CONFIG_FILE" || true
+
           # Pastikan tidak ada file .config di root source tree sebelum make dipanggil
           if [ "$CONFIG_FILE" != ".config" ]; then
             rm -f .config
           fi
 
           make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" olddefconfig 2>&1 | tee /tmp/olddefconfig.log
+
+          echo "=== CONFIG_KSU setelah olddefconfig ==="
+          grep -E "^CONFIG_KSU" "$CONFIG_FILE" || true
 
           echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
           MISSING=0
@@ -458,7 +486,7 @@ jobs:
 
           try:
               req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=1", headers=headers)
-              with urllib.request.urlopen(req) as resp:
+              with urllib.request.urlopen(req, timeout=15) as resp:
                   releases = json.loads(resp.read().decode("utf-8"))
               if releases:
                   assets = releases[0].get("assets", [])
@@ -469,7 +497,12 @@ jobs:
                           apks = universal
                   for a in apks:
                       print(f"[+] Downloading {a['name']} from {repo}...")
-                      urllib.request.urlretrieve(a["browser_download_url"], a["name"])
+                      try:
+                          req_apk = urllib.request.Request(a["browser_download_url"], headers={"User-Agent": "Mozilla/5.0"})
+                          with urllib.request.urlopen(req_apk, timeout=30) as resp_apk, open(a["name"], "wb") as f_out:
+                              f_out.write(resp_apk.read())
+                      except Exception as dl_err:
+                          print(f"[!] Warning: Gagal mengunduh {a['name']}: {dl_err}")
           except Exception as e:
               print(f"[!] Warning: Failed to fetch manager APK: {e}")
           EOF
