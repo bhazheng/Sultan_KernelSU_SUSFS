@@ -1,9 +1,26 @@
-name: Sultan
+name: Sultan (GCC)
 permissions:
   contents: write
   actions: write
 
 on:
+  workflow_dispatch:
+    inputs:
+      codename:
+        description: "Device codename (e.g. gs201)"
+        required: true
+        default: "gs201"
+        type: string
+      android_version:
+        description: "Android version (e.g. android14)"
+        required: true
+        default: "android14"
+        type: string
+      kernel_version:
+        description: "Kernel version (e.g. 6.1)"
+        required: true
+        default: "6.1"
+        type: string
   workflow_call:
     inputs:
       repo:
@@ -120,6 +137,13 @@ jobs:
 
           fi
 
+          # Fix GCC designated-init error pada struct selinux_state fake_state = {0};
+          for f in drivers/kernelsu/feature/selinux_hide.c KernelSU/kernel/feature/selinux_hide.c KernelSU-Next/kernel/feature/selinux_hide.c; do
+            if [ -f "$f" ]; then
+              sed -i 's/fake_state = {0};/fake_state = {};/g' "$f"
+            fi
+          done
+
           # Hapus dependensi KPROBES yang menggugurkan CONFIG_KSU saat olddefconfig (Sultan kernel menonaktifkan Kprobes)
           for kc in drivers/kernelsu/Kconfig KernelSU/kernel/Kconfig KernelSU-Next/kernel/Kconfig; do
             if [ -f "$kc" ]; then
@@ -137,6 +161,10 @@ jobs:
           fi
           if ! grep -q 'kernelsu' drivers/Makefile; then
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          fi
+
+          if [ -f drivers/kernelsu/Makefile ]; then
+            echo "subdir-ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Makefile
           fi
 
           # Validasi
@@ -164,6 +192,24 @@ jobs:
           patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
           curl -fsSL --retry 3 https://raw.githubusercontent.com/TheWildJames/kernel_patches/main/sultan/sys.c_fix.patch | patch -p1 || true
+
+          # Export SELinux symbols for ReSukiSU static export check
+          sed -i -E 's/static[[:space:]]+ssize_t[[:space:]]*\(\*write_op\[\]\)/ssize_t (*write_op[])/g' security/selinux/selinuxfs.c 2>/dev/null || true
+          sed -i -E 's/static[[:space:]]+const[[:space:]]+struct[[:space:]]+file_operations[[:space:]]+sel_handle_status_ops/const struct file_operations sel_handle_status_ops/g' security/selinux/selinuxfs.c 2>/dev/null || true
+          sed -i 's/static struct page \*selinux_status_page/struct page *selinux_status_page/g' security/selinux/selinuxfs.c 2>/dev/null || true
+          sed -i 's/static DEFINE_MUTEX(selinux_status_lock)/DEFINE_MUTEX(selinux_status_lock)/g' security/selinux/selinuxfs.c 2>/dev/null || true
+          if grep -q "sel_handle_status_ops" security/selinux/selinuxfs.c && ! grep -q "EXPORT_SYMBOL.*sel_handle_status_ops" security/selinux/selinuxfs.c; then
+            echo "EXPORT_SYMBOL(sel_handle_status_ops);" >> security/selinux/selinuxfs.c
+          fi
+          if grep -q "write_op" security/selinux/selinuxfs.c && ! grep -q "EXPORT_SYMBOL.*write_op" security/selinux/selinuxfs.c; then
+            echo "EXPORT_SYMBOL(write_op);" >> security/selinux/selinuxfs.c
+          fi
+          if grep -q "selinux_status_page" security/selinux/selinuxfs.c && ! grep -q "EXPORT_SYMBOL.*selinux_status_page" security/selinux/selinuxfs.c; then
+            echo "EXPORT_SYMBOL(selinux_status_page);" >> security/selinux/selinuxfs.c
+          fi
+          if grep -q "selinux_status_lock" security/selinux/selinuxfs.c && ! grep -q "EXPORT_SYMBOL.*selinux_status_lock" security/selinux/selinuxfs.c; then
+            echo "EXPORT_SYMBOL(selinux_status_lock);" >> security/selinux/selinuxfs.c
+          fi
 
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -301,6 +347,7 @@ jobs:
             echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set"
             echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
             echo "CONFIG_THREAD_INFO_IN_TASK=y"
+            echo "CONFIG_DEBUG_KERNEL=y"
             echo "CONFIG_KALLSYMS=y"
             echo "CONFIG_KALLSYMS_ALL=y"
             echo "CONFIG_OVERLAY_FS=y"
@@ -322,22 +369,25 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-      - name: Build the Kernel (GCC 14.2)
+      - name: Build the Kernel
         shell: bash
         run: |
           set -euo pipefail
           cd "$CONFIG"
 
-          TOOLCHAIN_PREFIX="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
-          CC_COMPILER="${TOOLCHAIN_PREFIX}gcc"
           export ARCH=arm64
           export SUBARCH=arm64
+
+          TOOLCHAIN_PREFIX="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
+          CC_COMPILER="${TOOLCHAIN_PREFIX}gcc"
+          export KCFLAGS="-Wno-error=designated-init -Wno-designated-init"
+          MAKE_ARGS="CC=$CC_COMPILER CROSS_COMPILE=$TOOLCHAIN_PREFIX"
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
 
           # 1. Defconfig dasar (Sultan Makefile otomatis mengarahkan output build ke out/)
-          make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          make $MAKE_ARGS -j$(nproc --all) ${{ inputs.codename }}_defconfig
 
           # Deteksi file config aktif (Sultan Makefile menaruhnya di out/.config)
           CONFIG_FILE="out/.config"
@@ -359,6 +409,7 @@ jobs:
             -d CONFIG_KSU_SUSFS_OPEN_REDIRECT \
             -e CONFIG_KSU_SUSFS_SUS_MAP \
             -e CONFIG_THREAD_INFO_IN_TASK \
+            -e CONFIG_DEBUG_KERNEL \
             -e CONFIG_KALLSYMS \
             -e CONFIG_KALLSYMS_ALL \
             -e CONFIG_OVERLAY_FS \
@@ -381,7 +432,7 @@ jobs:
             rm -f .config
           fi
 
-          make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" olddefconfig 2>&1 | tee /tmp/olddefconfig.log
+          make $MAKE_ARGS olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
           echo "=== CONFIG_KSU setelah olddefconfig ==="
           grep -E "^CONFIG_KSU" "$CONFIG_FILE" || true
@@ -396,15 +447,19 @@ jobs:
             echo "::error::CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
             MISSING=1
           fi
+          if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
+            echo "::warning::CONFIG_KALLSYMS_ALL tidak aktif, menginjeksi langsung ke $CONFIG_FILE..."
+            ./scripts/config --file "$CONFIG_FILE" -e CONFIG_DEBUG_KERNEL -e CONFIG_KALLSYMS -e CONFIG_KALLSYMS_ALL
+          fi
           if [ $MISSING -eq 1 ]; then
             grep -i "ksu" /tmp/olddefconfig.log || true
             exit 1
           fi
 
           # 3. Kompilasi Paralel
-          make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
+          make $MAKE_ARGS LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
-            make CC="$CC_COMPILER" CROSS_COMPILE="$TOOLCHAIN_PREFIX" LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
+            make $MAKE_ARGS LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
             exit 1
           }
 
@@ -445,7 +500,7 @@ jobs:
           fi
 
           cd ../AnyKernel3
-          ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan.zip"
+          ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan-gcc.zip"
           zip -qr "../$ZIP_NAME" ./*
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
@@ -457,9 +512,10 @@ jobs:
         shell: bash
         run: |
           cat << EOF >> "$GITHUB_STEP_SUMMARY"
-          ### 🚀 Build Summary: ${{ inputs.codename }} (${{ matrix.variant }})
+          ### 🚀 Build Summary: ${{ inputs.codename }} (${{ matrix.variant }}) [GCC]
           | Komponen | Status / Nilai |
           |---|---|
+          | **Compiler** | `GCC 14.2.0 (AArch64)` |
           | **Variant** | `${{ matrix.variant }}` |
           | **Artifact Name** | `${{ env.ZIP_NAME }}` |
           | **SHA-256** | \`${{ env.ZIP_SHA }}\` |
@@ -510,7 +566,7 @@ jobs:
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ inputs.codename }}-${{ matrix.variant }}
+          name: kernel-${{ inputs.codename }}-${{ matrix.variant }}-gcc
           path: |
             ${{ github.workspace }}/*.zip
             ${{ github.workspace }}/*.sha256
@@ -521,7 +577,7 @@ jobs:
       - name: Upload NoMount Metamodule Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}
+          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-gcc
           path: |
             ${{ github.workspace }}/NoMount-*.zip
             ${{ github.workspace }}/NoMount-*.sha256
@@ -556,12 +612,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}.zip" rej
+          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}-gcc.zip" rej
 
       - name: Upload .rej bundle
         if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: rej-${{ inputs.codename }}-${{ matrix.variant }}
+          name: rej-${{ inputs.codename }}-${{ matrix.variant }}-gcc
           path: |
-            rej-${{ inputs.codename }}-${{ matrix.variant }}*.zip
+            rej-${{ inputs.codename }}-${{ matrix.variant }}-gcc*.zip
