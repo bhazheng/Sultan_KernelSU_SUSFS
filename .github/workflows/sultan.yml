@@ -144,14 +144,14 @@ jobs:
             fi
           done
 
-          # Hapus dependensi KPROBES yang menggugurkan CONFIG_KSU saat olddefconfig (Sultan kernel menonaktifkan Kprobes)
-          for kc in drivers/kernelsu/Kconfig KernelSU/kernel/Kconfig KernelSU-Next/kernel/Kconfig; do
-            if [ -f "$kc" ]; then
-              sed -i '/depends on.*KPROBES/d' "$kc" || true
-              sed -i 's/depends on KPROBES || SUSFS//g' "$kc" || true
-              sed -i 's/depends on KPROBES && EXT4_FS//g' "$kc" || true
-              sed -i 's/depends on KPROBES//g' "$kc" || true
-              sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/g' "$kc" || true
+          # Pastikan KPROBES dapat aktif pada Sultan kernel (yang memakai CONFIG_INTEGRATE_MODULES=y)
+          sed -i 's/depends on MODULES/depends on MODULES || INTEGRATE_MODULES/g' arch/Kconfig 2>/dev/null || true
+
+
+          # Hindari call security_add_hooks di runtime (device_initcall) pada ReSukiSU yang memicu panic di Linux 6.1
+          for f in drivers/kernelsu/hook/lsm_hooks.c KernelSU/kernel/hook/lsm_hooks.c; do
+            if [ -f "$f" ]; then
+              sed -i 's/security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");/\/* security_add_hooks disabled for GKI 6.1 *\//g' "$f"
             fi
           done
 
@@ -178,30 +178,11 @@ jobs:
           # Fix macro ksu_flush_icache pada patch_memory.c yang tidak menyertakan argumen fungsi
           for pm in drivers/kernelsu/hook/arm64/patch_memory.c KernelSU/kernel/hook/arm64/patch_memory.c KernelSU-Next/kernel/hook/arm64/patch_memory.c; do
             if [ -f "$pm" ]; then
-              sed -i 's/#define ksu_flush_icache(start, end) caches_clean_inval_pou$/#define ksu_flush_icache(start, end) caches_clean_inval_pou(start, end)/g' "$pm"
-              sed -i 's/#define ksu_flush_icache(start, end) __flush_icache_range$/#define ksu_flush_icache(start, end) __flush_icache_range(start, end)/g' "$pm"
+              sed -i -E 's/#define ksu_flush_icache\(start, end\) caches_clean_inval_pou[[:space:]]*$/#define ksu_flush_icache(start, end) caches_clean_inval_pou(start, end)/g' "$pm"
+              sed -i -E 's/#define ksu_flush_icache\(start, end\) __flush_icache_range[[:space:]]*$/#define ksu_flush_icache(start, end) __flush_icache_range(start, end)/g' "$pm"
             fi
           done
 
-          # Pastikan patch_memory.o selalu terkompilasi meskipun CONFIG_KPROBES dimatikan (Sultan kernel)
-          for kb in drivers/kernelsu/Kbuild KernelSU/kernel/Kbuild KernelSU-Next/kernel/Kbuild; do
-            if [ -f "$kb" ]; then
-              sed -i '/hook\/$(KSU_ARCH)\/patch_memory.o/d' "$kb"
-              echo 'ifdef KSU_ARCH' >> "$kb"
-              echo 'kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o' >> "$kb"
-              echo 'endif' >> "$kb"
-            fi
-          done
-
-          # Stub fallback untuk ksu_patch_text jika patch_memory tidak ter-link
-          for f in drivers/kernelsu/feature/selinux_hide.c KernelSU/kernel/feature/selinux_hide.c KernelSU-Next/kernel/feature/selinux_hide.c; do
-            if [ -f "$f" ]; then
-              sed -i '/ksu_patch_text.*addr.*insn/d' "$f" 2>/dev/null || true
-              if ! grep -q "__attribute__((weak)) ksu_patch_text" "$f"; then
-                echo "int __attribute__((weak)) ksu_patch_text(void *dst, void *src, size_t len, int flags) { (void)dst; (void)src; (void)len; (void)flags; return 0; }" >> "$f"
-              fi
-            fi
-          done
 
           # Validasi
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || {
@@ -228,6 +209,7 @@ jobs:
           patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
           curl -fsSL --retry 3 https://raw.githubusercontent.com/TheWildJames/kernel_patches/main/sultan/sys.c_fix.patch | patch -p1 || true
+          grep -q "susfs.o" fs/Makefile || echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
 
           # Sediakan weak stub untuk ksu_install_su_fd agar varian tanpa fungsi ini (seperti ReSukiSU) dapat link vmlinux tanpa error
           if grep -q "ksu_install_su_fd" fs/exec.c && ! grep -q "ksu_install_su_fd(void)[[:space:]]*{" fs/exec.c; then
@@ -235,7 +217,7 @@ jobs:
           fi
 
           # Export SELinux symbols for ReSukiSU static export check
-          sed -i -E 's/static[[:space:]]+ssize_t[[:space:]]*\(\*write_op\[\]\)/ssize_t (*write_op[])/g' security/selinux/selinuxfs.c 2>/dev/null || true
+          sed -i -E 's/static[[:space:]]+ssize_t[[:space:]]*\(\*(const[[:space:]]+)?write_op\[\]\)/ssize_t (*\1write_op[])/g' security/selinux/selinuxfs.c 2>/dev/null || true
           sed -i -E 's/static[[:space:]]+const[[:space:]]+struct[[:space:]]+file_operations[[:space:]]+sel_handle_status_ops/const struct file_operations sel_handle_status_ops/g' security/selinux/selinuxfs.c 2>/dev/null || true
           sed -i 's/static struct page \*selinux_status_page/struct page *selinux_status_page/g' security/selinux/selinuxfs.c 2>/dev/null || true
           sed -i 's/static DEFINE_MUTEX(selinux_status_lock)/DEFINE_MUTEX(selinux_status_lock)/g' security/selinux/selinuxfs.c 2>/dev/null || true
@@ -387,6 +369,10 @@ jobs:
             echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
             echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set"
             echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
+            echo "CONFIG_KPROBES=y"
+            echo "CONFIG_HAVE_KPROBES=y"
+            echo "CONFIG_KRETPROBES=y"
+            echo "CONFIG_KPROBE_EVENTS=y"
             echo "CONFIG_THREAD_INFO_IN_TASK=y"
             echo "CONFIG_DEBUG_KERNEL=y"
             echo "CONFIG_KALLSYMS=y"
@@ -438,6 +424,10 @@ jobs:
 
           # 2. Injeksi mutlak konfigurasi KSU dan Kprobes ke target config yang aktif
           ./scripts/config --file "$CONFIG_FILE" \
+            -e CONFIG_KPROBES \
+            -e CONFIG_HAVE_KPROBES \
+            -e CONFIG_KRETPROBES \
+            -e CONFIG_KPROBE_EVENTS \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -465,8 +455,8 @@ jobs:
               -e CONFIG_KSU_SUSFS
           fi
 
-          echo "=== CONFIG_KSU sebelum olddefconfig ==="
-          grep -E "^CONFIG_KSU" "$CONFIG_FILE" || true
+          echo "=== CONFIG_KSU & CONFIG_KPROBES sebelum olddefconfig ==="
+          grep -E "^CONFIG_K(SU|PROBE)" "$CONFIG_FILE" || true
 
           # Pastikan tidak ada file .config di root source tree sebelum make dipanggil
           if [ "$CONFIG_FILE" != ".config" ]; then
@@ -475,11 +465,15 @@ jobs:
 
           make $MAKE_ARGS olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
-          echo "=== CONFIG_KSU setelah olddefconfig ==="
-          grep -E "^CONFIG_KSU" "$CONFIG_FILE" || true
+          echo "=== CONFIG_KSU & CONFIG_KPROBES setelah olddefconfig ==="
+          grep -E "^CONFIG_K(SU|PROBE)" "$CONFIG_FILE" || true
 
-          echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
+          echo "========== Cek CONFIG_KSU & CONFIG_KPROBES setelah olddefconfig =========="
           MISSING=0
+          if ! grep -q "^CONFIG_KPROBES=y" "$CONFIG_FILE"; then
+            echo "::error::CONFIG_KPROBES tidak aktif setelah olddefconfig!"
+            MISSING=1
+          fi
           if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
             echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
             MISSING=1
@@ -611,7 +605,7 @@ jobs:
           path: |
             ${{ github.workspace }}/*.zip
             ${{ github.workspace }}/*.sha256
-            ${{ github.workspace }}/*.apk
+            !${{ github.workspace }}/*.apk
             !${{ github.workspace }}/NoMount-*.zip
             !${{ github.workspace }}/NoMount-*.sha256
 
@@ -622,6 +616,14 @@ jobs:
           path: |
             ${{ github.workspace }}/NoMount-*.zip
             ${{ github.workspace }}/NoMount-*.sha256
+
+      - name: Upload Manager APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Manager-APK-${{ inputs.codename }}-${{ matrix.variant }}-gcc
+          path: |
+            ${{ github.workspace }}/*.apk
+          if-no-files-found: warn
 
       - name: Collect .rej files
         if: ${{ always() }}
