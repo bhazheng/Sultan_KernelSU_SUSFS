@@ -299,10 +299,14 @@ jobs:
             echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
             echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set"
             echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
-            echo "CONFIG_KPROBES=y"
-            echo "CONFIG_HAVE_KPROBES=y"
-            echo "CONFIG_KRETPROBES=y"
-            echo "# CONFIG_KPROBE_EVENTS is not set"
+            # NOTE (Sultan): KPROBES sengaja TIDAK diset. gs201_defconfig
+            # memuat CONFIG_INTEGRATE_MODULES=y, dan kernel/module/Kconfig
+            # memaksa `menuconfig MODULES depends on !INTEGRATE_MODULES`,
+            # sedangkan arch/Kconfig memaksa `config KPROBES depends on MODULES`.
+            # Jadi KPROBES tak pernah bisa aktif di kernel ini dan olddefconfig
+            # selalu mencoretnya. Kedua varian KSU tidak butuh KPROBES karena
+            # memakai SUSFS inline hook (KernelSU-Next: `depends on KPROBES || SUSFS`;
+            # ReSukiSU: choice KSU_SUSFS). Jangan mengembalikan baris KPROBES di sini.
             echo "CONFIG_THREAD_INFO_IN_TASK=y"
             echo "CONFIG_DEBUG_KERNEL=y"
             echo "CONFIG_KALLSYMS=y"
@@ -352,12 +356,10 @@ jobs:
             CONFIG_FILE=".config"
           fi
 
-          # 2. Injeksi mutlak konfigurasi KSU dan Kprobes ke target config yang aktif
+          # 2. Injeksi mutlak konfigurasi KSU ke target config yang aktif
+          # (tanpa KPROBES/HAVE_KPROBES/KRETPROBES/KPROBE_EVENTS — lihat NOTE di atas;
+          # HAVE_KPROBES adalah simbol select-only milik arch, bukan untuk diset manual)
           ./scripts/config --file "$CONFIG_FILE" \
-            -e CONFIG_KPROBES \
-            -e CONFIG_HAVE_KPROBES \
-            -e CONFIG_KRETPROBES \
-            -d CONFIG_KPROBE_EVENTS \
             -e CONFIG_KSU \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -385,8 +387,8 @@ jobs:
               -e CONFIG_KSU_SUSFS
           fi
 
-          echo "=== CONFIG_KSU & CONFIG_KPROBES sebelum olddefconfig ==="
-          grep -E "^CONFIG_K(SU|PROBE)" "$CONFIG_FILE" || true
+          echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
+          grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
 
           # Pastikan tidak ada file .config di root source tree sebelum make dipanggil
           if [ "$CONFIG_FILE" != ".config" ]; then
@@ -395,14 +397,18 @@ jobs:
 
           make $MAKE_ARGS olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
-          echo "=== CONFIG_KSU & CONFIG_KPROBES setelah olddefconfig ==="
-          grep -E "^CONFIG_K(SU|PROBE)" "$CONFIG_FILE" || true
+          echo "=== CONFIG_KSU (& status KPROBES/MODULES) setelah olddefconfig ==="
+          grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
 
-          echo "========== Cek CONFIG_KSU & CONFIG_KPROBES setelah olddefconfig =========="
+          echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
           MISSING=0
-          if ! grep -q "^CONFIG_KPROBES=y" "$CONFIG_FILE"; then
-            echo "::error::CONFIG_KPROBES tidak aktif setelah olddefconfig!"
-            MISSING=1
+          # KPROBES ekspektasinya NONAKTIF di Sultan: INTEGRATE_MODULES=y
+          # menonaktifkan MODULES, dan KPROBES depends on MODULES.
+          # Ini bukan error — kedua varian KSU memakai SUSFS inline hook.
+          if grep -q "^CONFIG_KPROBES=y" "$CONFIG_FILE"; then
+            echo "::warning::CONFIG_KPROBES aktif (tak terduga di Sultan; INTEGRATE_MODULES mungkin mati)."
+          else
+            echo "::notice::CONFIG_KPROBES nonaktif — ekspektasi Sultan (INTEGRATE_MODULES=y => MODULES=n => KPROBES=n)."
           fi
           if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
             echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
