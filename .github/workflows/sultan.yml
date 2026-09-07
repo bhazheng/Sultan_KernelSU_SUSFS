@@ -167,6 +167,23 @@ jobs:
             echo "subdir-ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Makefile
           fi
 
+          # Pastikan patch_memory.o selalu terkompilasi meskipun CONFIG_KPROBES dimatikan (Sultan kernel)
+          for kb in drivers/kernelsu/Kbuild KernelSU/kernel/Kbuild KernelSU-Next/kernel/Kbuild; do
+            if [ -f "$kb" ]; then
+              sed -i '/hook\/$(KSU_ARCH)\/patch_memory.o/d' "$kb"
+              echo 'ifdef KSU_ARCH' >> "$kb"
+              echo 'kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o' >> "$kb"
+              echo 'endif' >> "$kb"
+            fi
+          done
+
+          # Stub fallback untuk ksu_patch_text jika patch_memory tidak ter-link
+          for f in drivers/kernelsu/feature/selinux_hide.c KernelSU/kernel/feature/selinux_hide.c KernelSU-Next/kernel/feature/selinux_hide.c; do
+            if [ -f "$f" ] && ! grep -q "ksu_patch_text(void \*addr" "$f"; then
+              echo "void __attribute__((weak)) ksu_patch_text(void *addr, const void *insn, size_t size) { }" >> "$f"
+            fi
+          done
+
           # Validasi
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || {
             echo "::error::Gagal mendaftarkan drivers/kernelsu/Kconfig ke drivers/Kconfig!"
@@ -192,6 +209,11 @@ jobs:
           patch -p1 < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" || true
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
           curl -fsSL --retry 3 https://raw.githubusercontent.com/TheWildJames/kernel_patches/main/sultan/sys.c_fix.patch | patch -p1 || true
+
+          # Sediakan weak stub untuk ksu_install_su_fd agar varian tanpa fungsi ini (seperti ReSukiSU) dapat link vmlinux tanpa error
+          if grep -q "ksu_install_su_fd" fs/exec.c && ! grep -q "ksu_install_su_fd(void)[[:space:]]*{" fs/exec.c; then
+            echo "int __attribute__((weak)) ksu_install_su_fd(void) { return 0; }" >> fs/exec.c
+          fi
 
           # Export SELinux symbols for ReSukiSU static export check
           sed -i -E 's/static[[:space:]]+ssize_t[[:space:]]*\(\*write_op\[\]\)/ssize_t (*write_op[])/g' security/selinux/selinuxfs.c 2>/dev/null || true
