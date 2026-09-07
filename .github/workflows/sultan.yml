@@ -166,6 +166,14 @@ jobs:
           if [ -f drivers/kernelsu/Makefile ]; then
             echo "subdir-ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Makefile
           fi
+          if [ -f drivers/kernelsu/Kbuild ]; then
+            echo "ccflags-y += -Wno-designated-init -Wno-error=designated-init" >> drivers/kernelsu/Kbuild
+          fi
+          for kb in drivers/kernelsu/Kbuild KernelSU/kernel/Kbuild KernelSU-Next/kernel/Kbuild; do
+            if [ -f "$kb" ]; then
+              sed -i 's/-Wno-gcc-compat//g' "$kb" 2>/dev/null || true
+            fi
+          done
 
           # Pastikan patch_memory.o selalu terkompilasi meskipun CONFIG_KPROBES dimatikan (Sultan kernel)
           for kb in drivers/kernelsu/Kbuild KernelSU/kernel/Kbuild KernelSU-Next/kernel/Kbuild; do
@@ -179,8 +187,11 @@ jobs:
 
           # Stub fallback untuk ksu_patch_text jika patch_memory tidak ter-link
           for f in drivers/kernelsu/feature/selinux_hide.c KernelSU/kernel/feature/selinux_hide.c KernelSU-Next/kernel/feature/selinux_hide.c; do
-            if [ -f "$f" ] && ! grep -q "ksu_patch_text(void \*addr" "$f"; then
-              echo "void __attribute__((weak)) ksu_patch_text(void *addr, const void *insn, size_t size) { }" >> "$f"
+            if [ -f "$f" ]; then
+              sed -i '/ksu_patch_text.*addr.*insn/d' "$f" 2>/dev/null || true
+              if ! grep -q "__attribute__((weak)) ksu_patch_text" "$f"; then
+                echo "int __attribute__((weak)) ksu_patch_text(void *dst, void *src, size_t len, int flags) { (void)dst; (void)src; (void)len; (void)flags; return 0; }" >> "$f"
+              fi
             fi
           done
 
