@@ -138,7 +138,10 @@ jobs:
           # Repositori kernel wajib di-clone penuh (tanpa --depth=1)
           git clone https://github.com/bhazheng/android_kernel_google_tensynos &
 
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-android14-6.1" &
+          # FS-side dari branch Sultan (50_add rebased untuk tree tensynos;
+          # hunk sys.c/readdir/task_mmu mengikuti konteks Sultan). Sisi-KSU tetap
+          # glue Ante0 (10_enable byte-identik di kedua branch — verifikasi SHA).
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" &
 
           # Patch glue Ante0 untuk Next resmi (fix v2.2.0 + unicode + fixer) —
           # hanya dipakai varian Next; clone di sini agar langkah ini tetap agnostik varian.
@@ -181,7 +184,7 @@ jobs:
           shas = {
               "kernel_tree_bhazheng": local_head(config),
               "KernelSU-Next_dev": ls_remote("https://github.com/KernelSU-Next/KernelSU-Next.git", "refs/heads/dev"),
-              "susfs4ksu_gki-android14-6.1": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/gki-android14-6.1"),
+              "susfs4ksu_sultan-shiba-susfs-minimal": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/sultan-shiba-susfs-minimal"),
               "nomount_dev": ls_remote("https://github.com/maxsteeel/nomount.git", "refs/heads/dev"),
               "Ante0_kernel_patches_HEAD": ls_remote("https://github.com/Ante0/kernel_patches.git", "HEAD"),
               "Ante0_fix_patches_HEAD": ls_remote("https://github.com/Ante0/fix_patches.git", "HEAD"),
@@ -264,8 +267,11 @@ jobs:
           # Resep KernelSU-Next ala Ante0/SULTAN17 (Next resmi `dev` + susfs upstream):
           # urutan = unicode -> copy susfs -> 50_add (tree) -> 10_enable (KernelSU-Next)
           # -> 8 fix v2.2.0 (KernelSU-Next) -> fixer.patch (tree).
-          # Semua patch opsional ala apply_patch_optional Ante0: gagal = warning
-          # eksplisit + lanjut (reject terlihat di log; bukan `|| true` yang diam).
+          # Patch sisi tree (unicode/50_add/fixer): warn-lanjut ala Ante0.
+          # Patch sisi KernelSU-Next (10_enable + 8 fix): WAJIB teraplikasi
+          # (fail-closed) — tanpanya tree Next inkonsisten dan gagal di
+          # compile/link dengan error membingungkan. Gagal = ::error:: eksplisit
+          # + exit 1; lihat artifact .rej untuk hunk yang ditolak (drift upstream).
           # Target -d "KernelSU-Next" (bukan drivers/kernelsu) karena path patch
           # berbentuk a/kernel/... (sama seperti perintah Ante0).
           SUSFS_DIR="../susfs4ksu/kernel_patches"
@@ -282,12 +288,16 @@ jobs:
           patch -p1 < "$SUSFS_DIR/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" \
             || echo "::warning::50_add_susfs gagal diterapkan, lanjut."
 
-          patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" \
-            || echo "::warning::10_enable_susfs gagal diterapkan, lanjut."
+          patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" || {
+            echo "::error::10_enable_susfs_for_ksu GAGAL teraplikasi — build dihentikan. Cek artifact .rej (drift upstream?)"
+            exit 1
+          }
 
           for f in fix_Kbuild "fix_init.c" "fix_kernel_umount.c" "fix_setuid_hook.c" "fix_sucompat.c" "fix_supercall.c" ksu_toolkit overwrite_hook_mode; do
-            patch -d "$KSUN_DIR" -p1 < "$ANTEO_DIR/next/susfs_fix_patches/v2.2.0/$f.patch" \
-              || echo "::warning::$f gagal diterapkan, lanjut."
+            patch -d "$KSUN_DIR" -p1 < "$ANTEO_DIR/next/susfs_fix_patches/v2.2.0/$f.patch" || {
+              echo "::error::Fix $f GAGAL teraplikasi — build dihentikan. Cek artifact .rej (drift upstream?)"
+              exit 1
+            }
           done
 
           patch -p1 < "../sultan_patches/fixer.patch" \
@@ -613,8 +623,10 @@ jobs:
             return 1
           }
 
-          # Unduh kptools-linux + kpimg + kpatch dari rilis STABIL terbaru
+          # Unduh kptools-linux + kpimg-android dari rilis STABIL terbaru
           # bmax121/KernelPatch (mendukung 6.1) via GitHub API.
+          # Catatan: rilis tidak menyertakan biner `kpatch`, dan sintaks kanonis
+          # kptools memang tanpa flag -K — jadi hanya dua asset ini yang wajib.
           TOOLS_DIR="$GITHUB_WORKSPACE/kptools"
           mkdir -p "$TOOLS_DIR"
           cd "$TOOLS_DIR"
@@ -654,8 +666,7 @@ jobs:
 
           kt = find("kptools-linux", "kptools", "linux")
           ki = find("kpimg-android", "kpimg")
-          kp = find("kpatch-android", "kpatch")
-          missing = [label for obj, label in ((kt, "kptools-linux"), (ki, "kpimg"), (kp, "kpatch")) if obj is None]
+          missing = [label for obj, label in ((kt, "kptools-linux"), (ki, "kpimg-android")) if obj is None]
           if missing:
               print(f"::error::Asset KernelPatch tidak ditemukan: {', '.join(missing)}")
               print("Asset tersedia: " + ", ".join(a["name"] for a in assets))
@@ -670,7 +681,6 @@ jobs:
           try:
               dl(kt, "kptools")
               dl(ki, "kpimg")
-              dl(kp, "kpatch")
           except Exception as e:
               print(f"::error::Gagal mengunduh asset KernelPatch: {e}")
               sys.exit(1)
@@ -695,7 +705,7 @@ jobs:
             exit 1
           fi
           echo "[+] Patching $IMAGE dengan KernelPatch..."
-          "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -K "$TOOLS_DIR/kpatch" -o "$IMAGE.patched"
+          "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -o "$IMAGE.patched"
           if [ ! -s "$IMAGE.patched" ]; then
             echo "::error::kptools gagal menghasilkan Image ter-patch!"
             exit 1
