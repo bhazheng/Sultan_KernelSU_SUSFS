@@ -718,6 +718,11 @@ jobs:
             echo "::error::File Image mentah tidak ditemukan (out/arch/arm64/boot/Image)!"
             exit 1
           fi
+          echo "=== Diagnostik pra-kptools (Image mentah) ==="
+          ls -la "$IMAGE" || true
+          stat -c "size=%s bytes" "$IMAGE" || true
+          file "$IMAGE" || true
+          head -c 64 "$IMAGE" | od -A x -t x1z || true
           echo "[+] Patching $IMAGE dengan KernelPatch..."
           "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -o "$IMAGE.patched"
           if [ ! -s "$IMAGE.patched" ]; then
