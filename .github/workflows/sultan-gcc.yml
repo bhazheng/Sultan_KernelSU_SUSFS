@@ -296,6 +296,17 @@ jobs:
           curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
           echo "--- overlay terunduh (latest, tanpa pin): ---"
           sha256sum "$OVERLAY_FILE"
+          # DEBUG SEMENTARA (paradoks umount): hunk byte-benar tapi FAILED @79
+          # deterministik di dua run. Tangkap penjelasan patch sendiri +
+          # dump whitespace-visible file aktual. HAPUS blok ini setelah hijau.
+          echo "--- patch version: $(patch --version | head -1) ---"
+          UMOUNT_HUNK="$GITHUB_WORKSPACE/umount-hunk.patch"
+          UMOUNT_START=$(grep -n "^--- a/kernel/feature/kernel_umount\.c" "$OVERLAY_FILE" | cut -d: -f1 || true)
+          sed -n "${UMOUNT_START:-1},999999p" "$OVERLAY_FILE" | awk '/^(---|\+\+\+|@@|[ +-\\])/{print; next}{exit}' > "$UMOUNT_HUNK" || true
+          echo "--- dry-run verbose hunk umount: ---"
+          patch -d "$KSUN_DIR" -p1 --verbose --dry-run < "$UMOUNT_HUNK" || true
+          echo "--- file aktual kernel_umount.c baris 70..120 (cat -A: tab=^I, akhir=$): ---"
+          sed -n '70,120p' "$KSUN_DIR/kernel/feature/kernel_umount.c" | cat -A || true
           patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
             echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
             exit 1
