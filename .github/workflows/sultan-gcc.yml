@@ -288,17 +288,14 @@ jobs:
             mv -f "$f" "rej-pre-overlay/$rel"
           done < <(find . -type f -name "*.rej" -print0)
 
-          # Overlay milik kita — fetch dari repo publik agar perbaikan overlay bisa
-          # di-update tanpa menyentuh workflow. SHA256 penuh diverifikasi sebelum
-          # apply (fail-closed bila tak cocok = drift upload).
+          # Overlay milik kita — fetch latest dari repo publik: tiap update overlay
+          # cukup upload + re-run, tanpa edit workflow. SHA dicatat di log sebagai
+          # jejak audit; apply tetap ketat (fail-closed).
           OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
-          OVERLAY_SHA="80b493bb33449eb3f4f4569a360d92b7f9e42afbbbffacc9a1e64b41faa76c52"
           OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
           curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
-          echo "$OVERLAY_SHA  $OVERLAY_FILE" | sha256sum -c - || {
-            echo "::error::Checksum overlay tidak cocok (drift upload?) — build dihentikan."
-            exit 1
-          }
+          echo "--- overlay terunduh (latest, tanpa pin): ---"
+          sha256sum "$OVERLAY_FILE"
           patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
             echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
             exit 1
@@ -308,13 +305,10 @@ jobs:
           # ke syscall newuname (SPOOF_UNAME default y). Konteks disesuaikan
           # untuk sys.c pasca-50_add shiba (tanpa blok is_gms stock).
           SYSUNAME_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/sys.c_fix.patch"
-          SYSUNAME_SHA="4329ec922cea36af556213e427f2f28c5cbdf348194de8f830ca241c2696b485"
           SYSUNAME_FILE="$GITHUB_WORKSPACE/sys.c_fix.patch"
           curl -fsSL --retry 3 "$SYSUNAME_URL" -o "$SYSUNAME_FILE"
-          echo "$SYSUNAME_SHA  $SYSUNAME_FILE" | sha256sum -c - || {
-            echo "::error::Checksum sys.c_fix tidak cocok — build dihentikan."
-            exit 1
-          }
+          echo "--- sys.c_fix terunduh (latest, tanpa pin): ---"
+          sha256sum "$SYSUNAME_FILE"
           patch -p1 < "$SYSUNAME_FILE" \
             || echo "::warning::sys.c_fix gagal diterapkan, lanjut."
 
