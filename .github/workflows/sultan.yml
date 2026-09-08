@@ -203,6 +203,19 @@ jobs:
             printf '\n# Sultan CI: guarantee task_stack_page() inline in every TU.\nccflags-y += -include linux/sched/task_stack.h\n' >> "$KB"
             echo "[+] -include task_stack.h ditambahkan ke $KB"
           fi
+          # 3. patch_memory.o (Next saja) — selinux_hide memanggil ksu_patch_text()
+          #    lewat jalur sel_open_handle_status yang TIDAK ter-guard SUSFS, tetapi
+          #    objeknya tercoret guard KPROBES. File-nya bebas-kprobe (stop_machine +
+          #    fixmap), jadi aman dibuild saat KPROBES=n. ReSukiSU tak perlu
+          #    (membangunnya unconditional berdasar arch).
+          if [ "${{ matrix.variant }}" = "KernelSU-Next" ]; then
+            if grep -qF 'selinux_hide needs patch_memory' "$KB"; then
+              echo "[*] patch_memory guard sudah ada di $KB."
+            else
+              printf '\n# Sultan CI (Next): selinux_hide needs patch_memory even when KPROBES=n.\nifeq ($(strip $(CONFIG_KPROBES)),)\nifdef KSU_ARCH\nkernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o\nendif\nendif\n' >> "$KB"
+              echo "[+] patch_memory guard ditambahkan ke $KB"
+            fi
+          fi
 
       - name: Apply SUSFS Patches
         shell: bash
