@@ -6,16 +6,34 @@ permissions:
   
 on:
   workflow_dispatch:
-        
+    inputs:
+      apatch_superkey:
+        description: "Superkey APatch (wajib hanya untuk varian APatch; kosongkan bila tidak build APatch)"
+        required: false
+        default: ""
+        type: string
+      variants:
+        description: "Varian yang di-build"
+        required: false
+        default: '["KernelSU-Next", "NoRoot", "APatch"]'
+        type: choice
+        options:
+          - '["KernelSU-Next", "NoRoot", "APatch"]'
+          - '["KernelSU-Next"]'
+          - '["NoRoot"]'
+          - '["APatch"]'
+
 jobs:
   build-kernel-gs201:
-    uses: ./.github/workflows/sultan.yml
+    uses: ./.github/workflows/sultan-clang.yml
     secrets: inherit
     with:
       codename: "gs201"
       repo: "android_kernel_google_tensynos"
       android_version: "android14"
       kernel_version: "6.1"
+      apatch_superkey: ${{ inputs.apatch_superkey }}
+      variants: ${{ inputs.variants }}
 
   trigger-release:
     runs-on: ubuntu-latest
@@ -25,22 +43,30 @@ jobs:
       REPO_OWNER: TheWildJames
       REPO_NAME: Sultan_KernelSU_SUSFS
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_NAME: "Sultan Kernels With Resukisu & SUSFS v2.2.0"
+      RELEASE_NAME: "Sultan Kernels (Next / NoRoot / APatch) + SUSFS"
       RELEASE_NOTES: |
-        This release contains Resukisu and SUSFS v2.2.0
+        This release contains Sultan gs201 kernels in 3 variants + NoMount metamodule.
         
         ⚠️ **COMPATIBILITY NOTICE** ⚠️
         Please ensure compatibility!
         
+        Variants:
+        -> KernelSU-Next + SUSFS (inline hook)
+        -> NoRoot (clean Sultan, no root — also usable as APatch base)
+        -> APatch (pre-rooted via KernelPatch; needs APatch Manager + the superkey used at build)
+        
         Module: 
         -> https://github.com/sidex15/ksu_module_susfs
+        -> NoMount metamodule (attached; for KSU variants & APatch)
         
         Managers:
-        -> https://github.com/ReSukiSU/ReSukiSU
+        -> https://github.com/pershoot/KernelSU-Next (Next)
+        -> https://github.com/bmax121/APatch (APatch)
         
         Features:
-        [+] Resukisu
-        [+] SUSFS v2.0.0
+        [+] KernelSU-Next / APatch
+        [+] SUSFS (Next)
+        [+] NoMount (Next & APatch)
         [+] BBRV3
 
     steps:
@@ -89,7 +115,7 @@ jobs:
       - name: Upload Release Assets Dynamically
         run: |
           # Loop through all files in the downloaded-artifacts directory
-          for file in ./downloaded-artifacts/kernel-*/*; do
+          for file in ./downloaded-artifacts/*/*; do
               # Skip directories
               if [ -d "$file" ]; then
                   continue
