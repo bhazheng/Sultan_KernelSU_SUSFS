@@ -38,10 +38,6 @@ on:
           - '["APatch"]'
   workflow_call:
     inputs:
-      repo:
-        required: false
-        type: string
-        default: ""
       codename:
         required: true
         type: string
@@ -73,7 +69,7 @@ jobs:
       - name: Validate Inputs
         shell: bash
         run: |
-          # Validasi awal ala Ante0: tree kernel bhazheng hanya untuk gs201.
+          # Validasi awal: tree kernel bhazheng hanya untuk gs201.
           # Gagal cepat sebelum runner mengunduh toolchain bila codename salah.
           case "${{ inputs.codename }}" in
             gs201)
@@ -96,7 +92,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          # ccache: cache kompilasi ala Ante0 (dipasang di sini, dipakai langkah Build).
+          # ccache: cache kompilasi (dipasang di sini, dipakai langkah Build).
           sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache
 
       - name: Download and extract GCC 14.2.0 (Streamed)
@@ -109,7 +105,7 @@ jobs:
       - name: Restore ccache
         uses: actions/cache@v4
         with:
-          # Cache compiler ala Ante0: key per codename+varian+toolchain agar
+          # Cache compiler: key per codename+varian+toolchain agar
           # tidak tercampur; restore-keys sebagai fallback prefix codename.
           path: ~/.cache/ccache
           key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-gcc-v1
@@ -140,20 +136,17 @@ jobs:
 
           # FS-side dari branch Sultan (50_add rebased untuk tree tensynos;
           # hunk sys.c/readdir/task_mmu mengikuti konteks Sultan). Sisi-KSU tetap
-          # glue Ante0 (10_enable byte-identik di kedua branch — verifikasi SHA).
+          # glue 10_enable (byte-identik di kedua branch susfs — verifikasi SHA).
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" &
 
-          # Patch glue Ante0 untuk Next resmi (fix v2.2.0 + unicode + fixer) —
-          # hanya dipakai varian Next; clone di sini agar langkah ini tetap agnostik varian.
-          git clone --depth=1 https://github.com/Ante0/kernel_patches.git anteo_kernel_patches &
-          git clone --depth=1 https://github.com/Ante0/fix_patches.git sultan_patches &
+          # Tunggu semua clone paralel selesai sebelum langkah berikut.
           wait
 
       - name: Record Upstream SHAs
         shell: bash
         run: |
           set -euo pipefail
-          # Manifest SHA ala Ante0 (nightly.json): catat tip tiap sumber upstream
+          # Manifest SHA: catat tip tiap sumber upstream
           # agar build dapat direproduksi/diaudit. Warn-only bila sumber gagal dihubungi.
           python3 - << 'EOF'
           import json, os, subprocess
@@ -186,8 +179,6 @@ jobs:
               "KernelSU-Next_dev": ls_remote("https://github.com/KernelSU-Next/KernelSU-Next.git", "refs/heads/dev"),
               "susfs4ksu_sultan-shiba-susfs-minimal": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/sultan-shiba-susfs-minimal"),
               "nomount_dev": ls_remote("https://github.com/maxsteeel/nomount.git", "refs/heads/dev"),
-              "Ante0_kernel_patches_HEAD": ls_remote("https://github.com/Ante0/kernel_patches.git", "HEAD"),
-              "Ante0_fix_patches_HEAD": ls_remote("https://github.com/Ante0/fix_patches.git", "HEAD"),
           }
           with open("upstream-shas.json", "w") as f:
               json.dump(shas, f, indent=2)
@@ -232,7 +223,7 @@ jobs:
           }
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Adding KernelSU-Next resmi (branch dev, ala Ante0/SULTAN17)..."
+            echo "[+] Adding KernelSU-Next resmi (branch dev)..."
             curl -LSs --retry 5 --retry-delay 5 --retry-all-errors \
               "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
               | bash -s dev
@@ -264,22 +255,16 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          # Resep KernelSU-Next ala Ante0/SULTAN17 (Next resmi `dev` + susfs upstream):
-          # urutan = unicode -> copy susfs -> 50_add (tree) -> 10_enable (KernelSU-Next)
-          # -> 8 fix v2.2.0 (KernelSU-Next) -> fixer.patch (tree).
-          # Patch sisi tree (unicode/50_add/fixer): warn-lanjut ala Ante0.
-          # Patch sisi KernelSU-Next (10_enable + 8 fix): WAJIB teraplikasi
-          # (fail-closed) — tanpanya tree Next inkonsisten dan gagal di
-          # compile/link dengan error membingungkan. Gagal = ::error:: eksplisit
-          # + exit 1; lihat artifact .rej untuk hunk yang ditolak (drift upstream).
-          # Target -d "KernelSU-Next" (bukan drivers/kernelsu) karena path patch
-          # berbentuk a/kernel/... (sama seperti perintah Ante0).
+          # Resep mandiri: Next resmi `dev` +
+          # susfs shiba (50_add + 10_enable) + overlay milik kita.
+          # urutan = copy susfs -> 50_add (tree) -> 10_enable (KernelSU-Next)
+          # -> overlay (gerbang keras) -> fixer sys-uname (tree).
+          # unicode_bypass Next dicakup langkah Optimization (post-50_add);
+          # bila 50_add butuh konteks pre-unicode, reject-nya masuk .rej dan
+          # dilipat ke overlay pada putaran berikut (loop konvergensi).
+          # Target -d "KernelSU-Next" karena path patch berbentuk a/kernel/....
           SUSFS_DIR="../susfs4ksu/kernel_patches"
-          ANTEO_DIR="../anteo_kernel_patches"
           KSUN_DIR="KernelSU-Next"
-
-          patch -p1 --forward < "$ANTEO_DIR/common/unicode_bypass_fix_6.1+.patch" \
-            || echo "::warning::unicode_bypass gagal diterapkan, lanjut."
 
           # SUSFS Common (libs)
           cp "$SUSFS_DIR/fs/"* ./fs/
@@ -288,20 +273,38 @@ jobs:
           patch -p1 < "$SUSFS_DIR/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" \
             || echo "::warning::50_add_susfs gagal diterapkan, lanjut."
 
-          patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" || {
-            echo "::error::10_enable_susfs_for_ksu GAGAL teraplikasi — build dihentikan. Cek artifact .rej (drift upstream?)"
+          patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" \
+            || echo "::warning::10_enable_susfs gagal diterapkan, lanjut (ditutup overlay)."
+
+          # Overlay milik kita — fetch dari repo publik agar perbaikan overlay bisa
+          # di-update tanpa menyentuh workflow. SHA256 penuh diverifikasi sebelum
+          # apply (fail-closed bila tak cocok = drift upload).
+          OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
+          OVERLAY_SHA="80b493bb33449eb3f4f4569a360d92b7f9e42afbbbffacc9a1e64b41faa76c52"
+          OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
+          curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
+          echo "$OVERLAY_SHA  $OVERLAY_FILE" | sha256sum -c - || {
+            echo "::error::Checksum overlay tidak cocok (drift upload?) — build dihentikan."
+            exit 1
+          }
+          patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
+            echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
             exit 1
           }
 
-          for f in fix_Kbuild "fix_init.c" "fix_kernel_umount.c" "fix_setuid_hook.c" "fix_sucompat.c" "fix_supercall.c" ksu_toolkit overwrite_hook_mode; do
-            patch -d "$KSUN_DIR" -p1 < "$ANTEO_DIR/next/susfs_fix_patches/v2.2.0/$f.patch" || {
-              echo "::error::Fix $f GAGAL teraplikasi — build dihentikan. Cek artifact .rej (drift upstream?)"
-              exit 1
-            }
-          done
-
-          patch -p1 < "../sultan_patches/fixer.patch" \
-            || echo "::warning::fixer.patch gagal diterapkan, lanjut."
+          # Sys-uname hook (remote, shiba-adapted): wiring susfs_spoof_uname()
+          # ke syscall newuname (SPOOF_UNAME default y). Konteks disesuaikan
+          # untuk sys.c pasca-50_add shiba (tanpa blok is_gms stock).
+          SYSUNAME_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/sys.c_fix.patch"
+          SYSUNAME_SHA="4329ec922cea36af556213e427f2f28c5cbdf348194de8f830ca241c2696b485"
+          SYSUNAME_FILE="$GITHUB_WORKSPACE/sys.c_fix.patch"
+          curl -fsSL --retry 3 "$SYSUNAME_URL" -o "$SYSUNAME_FILE"
+          echo "$SYSUNAME_SHA  $SYSUNAME_FILE" | sha256sum -c - || {
+            echo "::error::Checksum sys.c_fix tidak cocok — build dihentikan."
+            exit 1
+          }
+          patch -p1 < "$SYSUNAME_FILE" \
+            || echo "::warning::sys.c_fix gagal diterapkan, lanjut."
 
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -325,7 +328,6 @@ jobs:
           for p in "${PATCHES[@]}"; do
             curl -fsSL --retry 3 "$REPO/$p" | patch -p1 --forward || true
           done
-          sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
         if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'APatch' }}
@@ -456,7 +458,7 @@ jobs:
           else
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_NOMOUNT dilewati."
           fi
-          # Simbol KSU/SUSFS ala Ante0/SULTAN17 — hanya untuk KernelSU-Next
+          # Simbol KSU/SUSFS — hanya untuk KernelSU-Next
           # (NoRoot/APatch tidak membawa drivers/kernelsu maupun patch SUSFS):
           # KSU + SUSFS aktif, SUS_SU dimatikan eksplisit, sisanya default upstream.
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
@@ -484,7 +486,7 @@ jobs:
           export SUBARCH=arm64
 
           TOOLCHAIN_PREFIX="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
-          # ccache ala Ante0: bungkus compiler via wrapper script (tanpa spasi)
+          # ccache: bungkus compiler via wrapper script (tanpa spasi)
           # karena spasi dalam string MAKE_ARGS tidak dikutip ulang saat ekspansi
           # `make $MAKE_ARGS` — CC="ccache ..." langsung akan pecah jadi target make.
           export CCACHE_DIR="$HOME/.cache/ccache"
@@ -511,7 +513,7 @@ jobs:
           # 2. Injeksi mutlak konfigurasi ke target config yang aktif
           # (tanpa KPROBES/HAVE_KPROBES/KRETPROBES/KPROBE_EVENTS — lihat NOTE di atas;
           # HAVE_KPROBES adalah simbol select-only milik arch, bukan untuk diset manual.
-          # Blok KSU ala Ante0/SULTAN17: paksa KSU + SUSFS aktif, SUS_SU mati
+          # Blok KSU: paksa KSU + SUSFS aktif, SUS_SU mati
           # (koheren dengan blok defconfig minimal di atas; sisanya default upstream).
           # Blok KSU hanya untuk varian root — NoRoot/APatch tidak ada drivers/kernelsu di tree.)
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
@@ -586,7 +588,7 @@ jobs:
             exit 1
           }
 
-          # Statistik ccache untuk log (diagnostik ala Ante0; tak menggagalkan build).
+          # Statistik ccache untuk log (tak menggagalkan build).
           ccache -s || true
 
       - name: Embed KernelPatch for APatch
