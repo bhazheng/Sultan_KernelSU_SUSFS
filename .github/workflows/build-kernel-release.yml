@@ -39,7 +39,6 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      repo: "android_kernel_google_tensynos"
       android_version: "android14"
       kernel_version: "6.1"
       apatch_superkey: ${{ inputs.apatch_superkey }}
@@ -51,7 +50,6 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      repo: "android_kernel_google_tensynos"
       android_version: "android14"
       kernel_version: "6.1"
       apatch_superkey: ${{ inputs.apatch_superkey }}
