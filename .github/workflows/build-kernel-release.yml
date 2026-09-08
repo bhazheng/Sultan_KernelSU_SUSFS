@@ -22,9 +22,31 @@ on:
           - '["KernelSU-Next"]'
           - '["NoRoot"]'
           - '["APatch"]'
+      toolchain:
+        description: "Toolchain yang dipakai"
+        required: false
+        default: "both"
+        type: choice
+        options:
+          - "both"
+          - "gcc"
+          - "clang"
 
 jobs:
-  build-kernel-gs201:
+  build-kernel-gs201-gcc:
+    if: ${{ inputs.toolchain == 'both' || inputs.toolchain == 'gcc' }}
+    uses: ./.github/workflows/sultan-gcc.yml
+    secrets: inherit
+    with:
+      codename: "gs201"
+      repo: "android_kernel_google_tensynos"
+      android_version: "android14"
+      kernel_version: "6.1"
+      apatch_superkey: ${{ inputs.apatch_superkey }}
+      variants: ${{ inputs.variants }}
+
+  build-kernel-gs201-clang:
+    if: ${{ inputs.toolchain == 'both' || inputs.toolchain == 'clang' }}
     uses: ./.github/workflows/sultan-clang.yml
     secrets: inherit
     with:
@@ -38,7 +60,8 @@ jobs:
   trigger-release:
     runs-on: ubuntu-latest
     needs:
-        - build-kernel-gs201
+        - build-kernel-gs201-gcc
+        - build-kernel-gs201-clang
     env:
       REPO_OWNER: TheWildJames
       REPO_NAME: Sultan_KernelSU_SUSFS
