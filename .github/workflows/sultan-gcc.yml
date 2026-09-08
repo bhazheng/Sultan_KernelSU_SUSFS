@@ -276,6 +276,18 @@ jobs:
           patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" \
             || echo "::warning::10_enable_susfs gagal diterapkan, lanjut (ditutup overlay)."
 
+          # Arsipkan .rej pra-overlay ke rej-pre-overlay/: GNU patch tidak
+          # menghapus .rej basi saat invocation berikutnya sukses, sehingga
+          # tanpa ini bundle tercampur jejak 10_enable dan atribusi overlay
+          # tak terbaca. Pasca-arsip, .rej yang muncul di tree = milik overlay
+          # (atau tahap sesudahnya) saja; arsip ikut terkumpul otomatis.
+          mkdir -p rej-pre-overlay
+          while IFS= read -r -d '' f; do
+            rel="${f#./}"
+            mkdir -p "rej-pre-overlay/$(dirname "$rel")"
+            mv -f "$f" "rej-pre-overlay/$rel"
+          done < <(find . -type f -name "*.rej" -print0)
+
           # Overlay milik kita — fetch dari repo publik agar perbaikan overlay bisa
           # di-update tanpa menyentuh workflow. SHA256 penuh diverifikasi sebelum
           # apply (fail-closed bila tak cocok = drift upload).
