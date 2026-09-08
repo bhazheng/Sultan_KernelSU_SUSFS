@@ -1,6 +1,6 @@
 # ============================================================
 # NEXT-SUSFS-FIXUP — gabungan 6 overlay (10_enable, Ante0-baseline)
-# Terbit: v1.0.0 | Terapkan: patch -p1 dari root KernelSU-Next, SETELAH set Ante0
+# Terbit: v1.1.0 | Terapkan: patch -p1 dari root KernelSU-Next mandiri (tanpa fix-pack Ante0). Hunk umount @@-79 diverifikasi ulang byte-exact thd state tanpa-fix-pack (0 mismatch @79).
 # Urutan hunk bebas (target disjoint); urutan bawah deterministik & terverifikasi.
 # File pecah per-target tetap tersedia di direktori yang sama.
 # ============================================================
