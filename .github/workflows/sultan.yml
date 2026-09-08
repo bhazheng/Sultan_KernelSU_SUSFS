@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ["KernelSU-Next", "ReSukiSU"]
+        variant: ["KernelSU-Next", "ReSukiSU", "NoRoot"]
 
     steps:
       - name: Free Disk Space on Runner
@@ -92,6 +92,7 @@ jobs:
           wait
 
       - name: Add Root Implementation & Version Anchoring
+        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -174,6 +175,7 @@ jobs:
           grep -n -B1 -A4 '^config KSU$' "$KSU_KCONFIG"
 
       - name: Fix KSU Link for Sultan (su-fd shim + task_stack include)
+        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -218,6 +220,7 @@ jobs:
           fi
 
       - name: Apply SUSFS Patches
+        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -258,6 +261,7 @@ jobs:
           sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
+        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -269,6 +273,7 @@ jobs:
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
 
       - name: Build and Package NoMount Metamodule
+        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -308,7 +313,6 @@ jobs:
           # (Mencegah YAML menambahkan spasi di depan kata "CONFIG_")
           # ---------------------------------------------------------
           {
-            echo "CONFIG_NOMOUNT=y"
             echo "CONFIG_TMPFS_XATTR=y"
             echo "CONFIG_TMPFS_POSIX_ACL=y"
             echo "CONFIG_IP_NF_TARGET_TTL=y"
@@ -357,23 +361,12 @@ jobs:
             echo "CONFIG_CIFS=y"
             echo "CONFIG_CIFS_XATTR=y"
             echo "CONFIG_CIFS_POSIX=y"
-            echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_SUSFS=y"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
-            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
-            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
-            echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set"
-            echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
             # NOTE (Sultan): KPROBES sengaja TIDAK diset. gs201_defconfig
             # memuat CONFIG_INTEGRATE_MODULES=y, dan kernel/module/Kconfig
             # memaksa `menuconfig MODULES depends on !INTEGRATE_MODULES`,
             # sedangkan arch/Kconfig memaksa `config KPROBES depends on MODULES`.
             # Jadi KPROBES tak pernah bisa aktif di kernel ini dan olddefconfig
-            # selalu mencoretnya. Kedua varian KSU tidak butuh KPROBES karena
+            # selalu mencoretnya. Varian root tidak butuh KPROBES karena
             # memakai SUSFS inline hook (KernelSU-Next: `depends on KPROBES || SUSFS`;
             # ReSukiSU: choice KSU_SUSFS). Jangan mengembalikan baris KPROBES di sini.
             # (Varian KernelSU-Next juga ditangani langkah "Fix KernelSU-Next Kconfig
@@ -394,6 +387,27 @@ jobs:
               echo "# CONFIG_KSU_MANUAL_HOOK is not set"
               echo "CONFIG_KSU_SUSFS=y"
             } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+          fi
+
+          # Varian NoRoot (tanpa root): lewati simbol NOMOUNT/KSU/SUSFS —
+          # tidak ada drivers/kernelsu maupun patch SUSFS/NoMount di tree.
+          if [ "${{ matrix.variant }}" != "NoRoot" ]; then
+            {
+              echo "CONFIG_NOMOUNT=y"
+              echo "CONFIG_KSU=y"
+              echo "CONFIG_KSU_SUSFS=y"
+              echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
+              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
+              echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+              echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
+              echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set"
+              echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
+            } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+          else
+            echo "[*] Varian NoRoot — injeksi NOMOUNT/KSU/SUSFS dilewati."
           fi
 
           sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
@@ -427,21 +441,27 @@ jobs:
             CONFIG_FILE=".config"
           fi
 
-          # 2. Injeksi mutlak konfigurasi KSU ke target config yang aktif
+          # 2. Injeksi mutlak konfigurasi ke target config yang aktif
           # (tanpa KPROBES/HAVE_KPROBES/KRETPROBES/KPROBE_EVENTS — lihat NOTE di atas;
-          # HAVE_KPROBES adalah simbol select-only milik arch, bukan untuk diset manual)
+          # HAVE_KPROBES adalah simbol select-only milik arch, bukan untuk diset manual.
+          # Blok KSU dilewati untuk varian NoRoot — tidak ada drivers/kernelsu di tree.)
+          if [ "${{ matrix.variant }}" != "NoRoot" ]; then
+            ./scripts/config --file "$CONFIG_FILE" \
+              -e CONFIG_KSU \
+              -e CONFIG_KSU_SUSFS \
+              -e CONFIG_KSU_SUSFS_SUS_PATH \
+              -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+              -e CONFIG_KSU_SUSFS_SUS_KSTAT \
+              -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+              -e CONFIG_KSU_SUSFS_ENABLE_LOG \
+              -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+              -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+              -d CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+              -e CONFIG_KSU_SUSFS_SUS_MAP
+          else
+            echo "[*] Varian NoRoot — injeksi CONFIG_KSU dilewati."
+          fi
           ./scripts/config --file "$CONFIG_FILE" \
-            -e CONFIG_KSU \
-            -e CONFIG_KSU_SUSFS \
-            -e CONFIG_KSU_SUSFS_SUS_PATH \
-            -e CONFIG_KSU_SUSFS_SUS_MOUNT \
-            -e CONFIG_KSU_SUSFS_SUS_KSTAT \
-            -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            -e CONFIG_KSU_SUSFS_ENABLE_LOG \
-            -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            -d CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            -e CONFIG_KSU_SUSFS_SUS_MAP \
             -e CONFIG_THREAD_INFO_IN_TASK \
             -e CONFIG_DEBUG_KERNEL \
             -e CONFIG_KALLSYMS \
@@ -481,13 +501,19 @@ jobs:
           else
             echo "::notice::CONFIG_KPROBES nonaktif — ekspektasi Sultan (INTEGRATE_MODULES=y => MODULES=n => KPROBES=n)."
           fi
-          if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
-            echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
-            MISSING=1
-          fi
-          if ! grep -q "^CONFIG_KSU_SUSFS=y" "$CONFIG_FILE"; then
-            echo "::error::CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
-            MISSING=1
+          # Varian NoRoot tidak membawa KSU — pemeriksaan ini dilewati
+          # (ketidakhadiran KSU justru ekspektasi yang benar).
+          if [ "${{ matrix.variant }}" != "NoRoot" ]; then
+            if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
+              echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
+              MISSING=1
+            fi
+            if ! grep -q "^CONFIG_KSU_SUSFS=y" "$CONFIG_FILE"; then
+              echo "::error::CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
+              MISSING=1
+            fi
+          else
+            echo "::notice::Varian NoRoot — pemeriksaan CONFIG_KSU dilewati (tanpa root)."
           fi
           if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
             echo "::warning::CONFIG_KALLSYMS_ALL tidak aktif, menginjeksi langsung ke $CONFIG_FILE..."
@@ -565,6 +591,7 @@ jobs:
           EOF
 
       - name: Fetch Manager APK
+        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -618,6 +645,7 @@ jobs:
             !${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload NoMount Metamodule Artifact
+        if: ${{ matrix.variant != 'NoRoot' }}
         uses: actions/upload-artifact@v4
         with:
           name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-gcc
