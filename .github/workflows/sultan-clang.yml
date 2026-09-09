@@ -607,17 +607,14 @@ jobs:
           chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
           export PATH="$HOME/.ccache-bin:$PATH"
           export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
-          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0 CFLAGS_memblock.o=-fno-lto"
-          # CFLAGS_memblock.o=-fno-lto adalah SATU token (tanpa spasi) agar
-          # selamat dari ekspansi `make $MAKE_ARGS` yang tak dikutip ulang.
-          # Kbuild menghormati $(CFLAGS_$(target-stem).o) PALING AKHIR di
-          # scripts/Makefile.lib, sehingga -fno-lto menang atas -flto=thin
-          # global HANYA untuk mm/memblock.o (variabel make command-line
-          # otomatis menurun ke sub-make). Hasil: satu-satunya TU non-LTO;
-          # memblock_free/memblock_reserve tetap kanonis untuk kptools
-          # FolkPatch, ThinLTO global tetap meng-GC dead code ECT. Global
-          # untuk semua varian (tak berpengaruh fungsional ke varian lain;
-          # target config mengabaikannya).
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
+
+          # FolkPatch: pastikan memblock_free & memblock_reserve tidak di-inline atau di-rename oleh LTO
+          # agar kptools selalu menemukan simbol kanonis.
+          if [ -f "mm/memblock.c" ]; then
+            sed -i 's/void __init_memblock memblock_free(/void __init_memblock __attribute__((used, noinline)) memblock_free(/' mm/memblock.c || true
+            sed -i 's/int __init_memblock memblock_reserve(/int __init_memblock __attribute__((used, noinline)) memblock_reserve(/' mm/memblock.c || true
+          fi
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config

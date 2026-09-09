@@ -560,18 +560,12 @@ jobs:
           CC_COMPILER="$HOME/.ccache-bin/aarch64-linux-gcc"
           export KCFLAGS="-Wno-error=designated-init -Wno-designated-init -Wno-unused-value -Wno-error=unused-value"
           MAKE_ARGS="CC=$CC_COMPILER CROSS_COMPILE=$TOOLCHAIN_PREFIX WERROR=0"
-          # FolkPatch: CFLAGS_memblock.o=-fno-lto adalah SATU token (tanpa
-          # spasi) agar selamat dari ekspansi `make $MAKE_ARGS` yang tak
-          # dikutip ulang. Kbuild menghormati $(CFLAGS_$(target-stem).o)
-          # PALING AKHIR di scripts/Makefile.lib, sehingga -fno-lto menang
-          # atas -flto global HANYA untuk mm/memblock.o (variabel make
-          # command-line otomatis menurun ke sub-make). Hasil: satu-satunya
-          # TU non-LTO di seluruh build; memblock_free/memblock_reserve
-          # tetap kanonis untuk kptools, LTO global tetap meng-GC dead code
-          # ECT. Target config (defconfig/olddefconfig) mengabaikannya.
-          # FolkPatch-only: varian lain (sudah terbukti boot) tak tersentuh.
-          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
-            MAKE_ARGS="$MAKE_ARGS CFLAGS_memblock.o=-fno-lto"
+
+          # FolkPatch: pastikan memblock_free & memblock_reserve tidak di-inline atau di-rename oleh GCC LTO
+          # agar kptools selalu menemukan simbol kanonis, tanpa memicu error GOT/PLT akibat non-LTO memblock.o.
+          if [ -f "mm/memblock.c" ]; then
+            sed -i 's/void __init_memblock memblock_free(/void __init_memblock __attribute__((used, noinline)) memblock_free(/' mm/memblock.c || true
+            sed -i 's/int __init_memblock memblock_reserve(/int __init_memblock __attribute__((used, noinline)) memblock_reserve(/' mm/memblock.c || true
           fi
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
@@ -677,7 +671,7 @@ jobs:
               echo "::error::CONFIG_LTO_GCC tidak aktif setelah olddefconfig — link FolkPatch pasti gagal. Cek defconfig."
               exit 1
             }
-            echo "[+] LTO GCC aktif untuk FolkPatch (mm/memblock.o non-LTO agar simbol kanonis)."
+            echo "[+] LTO GCC aktif untuk FolkPatch (memblock_free/reserve noinline agar simbol kanonis)."
           fi
 
           # 3. Kompilasi Paralel
