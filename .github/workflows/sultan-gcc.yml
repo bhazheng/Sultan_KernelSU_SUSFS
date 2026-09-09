@@ -571,6 +571,10 @@ jobs:
 
           export ARCH=arm64
           export SUBARCH=arm64
+          # Jalur GNU murni: pastikan tidak ada sisa LLVM dari environment
+          # runner/langkah lain yang membuat Kbuild beralih ke clang/lld.
+          unset LLVM
+          export LLVM_IAS=0
 
           TOOLCHAIN_PREFIX="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-"
           # ccache: bungkus compiler via wrapper script (tanpa spasi)
