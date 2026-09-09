@@ -96,16 +96,27 @@ jobs:
         run: |
           sudo apt-get update
           # ccache: cache kompilasi (dipasang di sini, dipakai langkah Build).
-          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake
 
-      - name: Download and extract ZyC Clang (Streamed)
+      - name: Download and extract Google Clang r584948b (Streamed)
         shell: bash
         run: |
           set -euo pipefail
-          echo "Fetching latest ZyC-Clang..."
+          echo "Fetching Google Clang r584948b (Android 16 official toolchain, Clang 22.0.1)..."
           mkdir -p $GITHUB_WORKSPACE/clang
-          CLANG_URL=$(curl -s https://api.github.com/repos/ZyCromerZ/Clang/releases/latest | grep "browser_download_url" | grep "tar.gz" | head -n 1 | cut -d '"' -f 4)
-          curl -fsSL "$CLANG_URL" | tar -xz -C $GITHUB_WORKSPACE/clang
+          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r584948b.tar.gz"
+          for i in 1 2 3 4 5; do
+            if curl -fsSL "$CLANG_URL" | tar -xz -C $GITHUB_WORKSPACE/clang; then
+              echo "[+] Google Clang r584948b extracted successfully"
+              break
+            fi
+            echo "retry $i/5 failed for: $CLANG_URL" >&2
+            sleep 5
+            if [ "$i" -eq 5 ]; then
+              echo "::error::Failed to download Google Clang r584948b after 5 attempts"
+              exit 1
+            fi
+          done
           chmod +x $GITHUB_WORKSPACE/clang/bin/* 2>/dev/null || true
           $GITHUB_WORKSPACE/clang/bin/clang --version
           $GITHUB_WORKSPACE/clang/bin/ld.lld --version
@@ -904,7 +915,7 @@ jobs:
           ### 🚀 Build Summary: ${{ inputs.codename }} (${{ matrix.variant }}) [Clang]
           | Komponen | Status / Nilai |
           |---|---|
-          | **Compiler** | `ZyC-Clang (LLVM)` |
+          | **Compiler** | `Google Clang r584948b (Android 16 official, Clang 22.0.1)` |
           | **Variant** | `${{ matrix.variant }}` |
           | **Artifact Name** | `${{ env.ZIP_NAME }}` |
           | **SHA-256** | \`${{ env.ZIP_SHA }}\` |
