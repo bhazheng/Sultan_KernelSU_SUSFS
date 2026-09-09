@@ -96,7 +96,7 @@ jobs:
         run: |
           sudo apt-get update
           # ccache: cache kompilasi (dipasang di sini, dipakai langkah Build).
-          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache zlib1g-dev
 
       - name: Download and extract GCC 14.2.0 (Streamed)
         shell: bash
@@ -739,9 +739,31 @@ jobs:
               echo "[+] Menerapkan patch System.map ke kallsym.c via patch_kptools.py..."
               python3 "$GITHUB_WORKSPACE/patch_kptools.py" "$GITHUB_WORKSPACE/KernelPatch-src/tools/kallsym.c" || true
             fi
+            # Salin preset.h dan header kernel ke tools/ agar include 'preset.h' pada patch.h berhasil
+            mkdir -p "$GITHUB_WORKSPACE/KernelPatch-src/tools"
+            if [ -f "$GITHUB_WORKSPACE/KernelPatch-src/kernel/include/preset.h" ]; then
+              cp -f "$GITHUB_WORKSPACE/KernelPatch-src/kernel/include/preset.h" "$GITHUB_WORKSPACE/KernelPatch-src/tools/preset.h"
+            fi
+            find "$GITHUB_WORKSPACE/KernelPatch-src" -name "preset.h" -exec cp -f {} "$GITHUB_WORKSPACE/KernelPatch-src/tools/" \; 2>/dev/null || true
+            make -C "$GITHUB_WORKSPACE/KernelPatch-src/kernel" hdr 2>/dev/null || true
+
+            COMPILED=0
             if make -C "$GITHUB_WORKSPACE/KernelPatch-src/tools" -j"$(nproc)"; then
               cp -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/kptools" "$TOOLS_DIR/kptools"
               chmod +x "$TOOLS_DIR/kptools"
+              COMPILED=1
+            elif command -v cmake >/dev/null 2>&1; then
+              echo "[+] Mencoba kompilasi kptools via CMake..."
+              cmake -B "$GITHUB_WORKSPACE/KernelPatch-src/tools/build" "$GITHUB_WORKSPACE/KernelPatch-src/tools"
+              cmake --build "$GITHUB_WORKSPACE/KernelPatch-src/tools/build" -j"$(nproc)"
+              if [ -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/build/kptools" ]; then
+                cp -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/build/kptools" "$TOOLS_DIR/kptools"
+                chmod +x "$TOOLS_DIR/kptools"
+                COMPILED=1
+              fi
+            fi
+
+            if [ "$COMPILED" -eq 1 ]; then
               echo "[+] Berhasil mengompilasi kptools kustom dengan dukungan System.map!"
             else
               echo "::warning::Kompilasi kptools source gagal, tetap menggunakan biner prebuilt sebagai fallback."
