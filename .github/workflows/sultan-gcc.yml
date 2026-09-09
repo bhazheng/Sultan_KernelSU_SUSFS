@@ -329,15 +329,6 @@ jobs:
             exit 1
           }
 
-          # Compat KernelSU-Next v3.3.0+: jika terdapat referensi ksu_late_loaded di dispatch.c,
-          # netralkan ke false untuk built-in build.
-          DISPATCH="$KSUN_DIR/kernel/supercall/dispatch.c"
-          if [ -f "$DISPATCH" ] && grep -q "ksu_late_loaded" "$DISPATCH"; then
-            echo "[+] Menetralkan referensi ksu_late_loaded di $DISPATCH (built-in => selalu false)..."
-            sed -i 's/\bksu_late_loaded\b/false/g' "$DISPATCH"
-          fi
-          grep -rn "ksu_late_loaded" "$KSUN_DIR/kernel/" || echo "[+] OK: tidak ada referensi ksu_late_loaded tersisa."
-
           # Cetak daftar dan isi semua file .rej yang ditemukan ke log console
           echo "=== Daftar file .rej yang ditemukan pasca-overlay ==="
           find . -type f -name "*.rej" -print || true
