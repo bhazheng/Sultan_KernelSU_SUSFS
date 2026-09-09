@@ -24,11 +24,11 @@ on:
       variants:
         description: "Varian yang di-build"
         required: false
-        default: '["KernelSU-Next", "NoRoot"]'
+        default: '["KernelSU-Next"]'
         type: choice
         options:
-          - '["KernelSU-Next", "NoRoot"]'
           - '["KernelSU-Next"]'
+          - '["KernelSU-Next", "NoRoot"]'
           - '["NoRoot"]'
   workflow_call:
     inputs:
@@ -45,7 +45,7 @@ on:
         description: "Varian yang di-build (JSON array)"
         required: false
         type: string
-        default: '["KernelSU-Next", "NoRoot"]'
+        default: '["KernelSU-Next"]'
 
 jobs:
   build-kernel-sultan-kernelsu-susfs:
@@ -251,9 +251,11 @@ jobs:
 
           # Matikan warning misleading-indentation di tree KernelSU untuk mencegah
           # GCC 14 memperlakukannya sebagai fatal error (-Werror)
-          if [ -f drivers/kernelsu/Makefile ]; then
-            echo "subdir-ccflags-y += -Wno-misleading-indentation" >> drivers/kernelsu/Makefile
-          fi
+          for kf in drivers/kernelsu/Kbuild drivers/kernelsu/Makefile KernelSU-Next/kernel/Kbuild KernelSU-Next/kernel/Makefile; do
+            if [ -f "$kf" ]; then
+              echo "subdir-ccflags-y += -Wno-misleading-indentation" >> "$kf"
+            fi
+          done
 
           # Validasi
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || {

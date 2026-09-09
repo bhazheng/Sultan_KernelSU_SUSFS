@@ -24,11 +24,11 @@ on:
       variants:
         description: "Varian yang di-build"
         required: false
-        default: '["KernelSU-Next", "NoRoot"]'
+        default: '["KernelSU-Next"]'
         type: choice
         options:
-          - '["KernelSU-Next", "NoRoot"]'
           - '["KernelSU-Next"]'
+          - '["KernelSU-Next", "NoRoot"]'
           - '["NoRoot"]'
   workflow_call:
     inputs:
@@ -45,7 +45,7 @@ on:
         description: "Varian yang di-build (JSON array)"
         required: false
         type: string
-        default: '["KernelSU-Next", "NoRoot"]'
+        default: '["KernelSU-Next"]'
 
 jobs:
   build-kernel-sultan-kernelsu-susfs:
