@@ -519,7 +519,7 @@ jobs:
           chmod +x "$HOME/.ccache-bin/aarch64-linux-gcc"
           CC_COMPILER="$HOME/.ccache-bin/aarch64-linux-gcc"
           export KCFLAGS="-Wno-error=designated-init -Wno-designated-init -Wno-unused-value -Wno-error=unused-value"
-          MAKE_ARGS="CC=$CC_COMPILER CROSS_COMPILE=$TOOLCHAIN_PREFIX"
+          MAKE_ARGS="CC=$CC_COMPILER CROSS_COMPILE=$TOOLCHAIN_PREFIX WERROR=0"
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
@@ -548,6 +548,7 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_KSU dilewati (tanpa root)."
           fi
           ./scripts/config --file "$CONFIG_FILE" \
+            -d CONFIG_WERROR \
             -e CONFIG_THREAD_INFO_IN_TASK \
             -e CONFIG_DEBUG_KERNEL \
             -e CONFIG_KALLSYMS \

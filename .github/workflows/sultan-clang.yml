@@ -533,11 +533,13 @@ jobs:
           export CCACHE_DIR="$HOME/.cache/ccache"
           export CCACHE_MAXSIZE=2G
           mkdir -p "$HOME/.ccache-bin"
-          printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang" > "$HOME/.ccache-bin/clang"
-          printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang++" > "$HOME/.ccache-bin/clang++"
+          EXTRA_WARN_FLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
+          printf '#!/bin/sh\nexec ccache "%s" '"$EXTRA_WARN_FLAGS"' "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang" > "$HOME/.ccache-bin/clang"
+          printf '#!/bin/sh\nexec ccache "%s" '"$EXTRA_WARN_FLAGS"' "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang++" > "$HOME/.ccache-bin/clang++"
           chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
           export PATH="$HOME/.ccache-bin:$PATH"
-          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu-"
+          export KCFLAGS="$EXTRA_WARN_FLAGS"
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
@@ -566,6 +568,7 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_KSU dilewati (tanpa root)."
           fi
           ./scripts/config --file "$CONFIG_FILE" \
+            -d CONFIG_WERROR \
             -d CONFIG_LTO_GCC \
             -e CONFIG_LTO_NONE \
             -e CONFIG_THREAD_INFO_IN_TASK \
