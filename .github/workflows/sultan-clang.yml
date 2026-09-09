@@ -561,13 +561,20 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-          # Perbaikan duplicate symbol: init_uts_ns & linux_banner pada ld.lld (Clang ThinLTO).
-          # Standar Linux 6.1 upstream: vmlinux.o hanya berisi simbol weak dari init/version.c
-          # tanpa menyertakan init/version-timestamp.o, karena init/version-timestamp.o
-          # di-link di scripts/link-vmlinux.sh.
+          # Perbaikan duplicate symbol: init_uts_ns & linux_banner pada ld.lld (Clang ThinLTO):
+          # 1. Hapus #include "version-timestamp.c" dari init/version.c sehingga hanya menyisakan
+          #    deklarasi __weak; implementasi non-weak sebenarnya tetap berada di version-timestamp.o
+          #    yang di-link di scripts/link-vmlinux.sh.
           sed -i '/version-timestamp\.c/d' init/version.c
-          sed -i 's|--whole-archive vmlinux.a init/version-timestamp.o|--whole-archive vmlinux.a --no-whole-archive|' scripts/Makefile.vmlinux_o
-          sed -i 's|vmlinux.a init/version-timestamp.o|vmlinux.a|' scripts/Makefile.vmlinux_o
+          # 2. Hapus init/version-timestamp.o dari vmlinux.o agar tidak dobel link,
+          #    TETAPI pertahankan $(KBUILD_VMLINUX_LIBS) (arch/arm64/lib/lib.a) di dalam
+          #    --whole-archive agar simbol vital arsitektur seperti arch/arm64/lib/tishift.o
+          #    (__lshrti3, __ashrti3, __ashlti3) tidak terbuang oleh linker saat LTO.
+          sed -i 's| init/version-timestamp\.o||g' scripts/Makefile.vmlinux_o
+          # 3. Pada scripts/link-vmlinux.sh, jangan kosongkan libs saat LTO aktif, agar
+          #    --start-group ${libs} --end-group dapat meresolusi simbol dari arch/arm64/lib/lib.a
+          #    dan lib/lib.a bila ada referensi simbol lib yang tersisa.
+          sed -i 's|libs=$|libs="${KBUILD_VMLINUX_LIBS}"|' scripts/link-vmlinux.sh
 
       - name: Build the Kernel
         shell: bash
