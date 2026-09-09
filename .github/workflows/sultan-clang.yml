@@ -533,12 +533,11 @@ jobs:
           export CCACHE_DIR="$HOME/.cache/ccache"
           export CCACHE_MAXSIZE=2G
           mkdir -p "$HOME/.ccache-bin"
-          EXTRA_WARN_FLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
-          printf '#!/bin/sh\nexec ccache "%s" '"$EXTRA_WARN_FLAGS"' "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang" > "$HOME/.ccache-bin/clang"
-          printf '#!/bin/sh\nexec ccache "%s" '"$EXTRA_WARN_FLAGS"' "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang++" > "$HOME/.ccache-bin/clang++"
+          printf '#!/bin/sh\nexec ccache "%s" -Qunused-arguments "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang" > "$HOME/.ccache-bin/clang"
+          printf '#!/bin/sh\nexec ccache "%s" -Qunused-arguments "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang++" > "$HOME/.ccache-bin/clang++"
           chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
           export PATH="$HOME/.ccache-bin:$PATH"
-          export KCFLAGS="$EXTRA_WARN_FLAGS"
+          export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
           MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
