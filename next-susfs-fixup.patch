@@ -1,6 +1,7 @@
 # ============================================================
 # NEXT-SUSFS-FIXUP — gabungan 6 overlay (10_enable, Ante0-baseline)
-# Terbit: v1.1.0 | Terapkan: patch -p1 dari root KernelSU-Next mandiri (tanpa fix-pack Ante0). Hunk umount @@-79 diverifikasi ulang byte-exact thd state tanpa-fix-pack (0 mismatch @79).
+# Terbit: v1.2.0 | Terapkan: patch -p1 dari root KernelSU-Next mandiri.
+# Fix: Hunk umount menggunakan 3 baris konteks kanonis @83 (menghilangkan ambiguitas duplikasi if return 0 di @79).
 # Urutan hunk bebas (target disjoint); urutan bawah deterministik & terverifikasi.
 # File pecah per-target tetap tersedia di direktori yang sama.
 # ============================================================
@@ -211,14 +212,10 @@
  
  	put_cred(ksu_cred);
 # Overlay fixup susfs-next (10_enable): hapus filter lama
-# ksu_handle_umount (skenario/is_appuid/umount-check/zygote-check). Adaptasi: tab-dev.
+# ksu_handle_umount (skenario/is_appuid/umount-check/zygote-check). Adaptasi: tab-dev (3 context lines @83).
 --- a/kernel/feature/kernel_umount.c
 +++ b/kernel/feature/kernel_umount.c
-@@ -79,34 +79,10 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
- 		return 0;
- 	}
- 
- 	if (!ksu_kernel_umount_enabled) {
+@@ -83,30 +83,6 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
  		return 0;
  	}
  
@@ -249,6 +246,7 @@
  	// umount the target mnt
  	pr_info("handle umount for uid: %d, pid: %d\n", new_uid, current->pid);
  
+
 # Overlay fixup susfs-next (10_enable): rewrite ksu_handle_setresuid
 # menjadi sadar-susfs (zygote/zygote_next, umount, extra work). Adaptasi: tab-dev +
 # kondisi seccomp multi-baris upstream sebagai '-'.
