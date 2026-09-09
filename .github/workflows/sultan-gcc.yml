@@ -342,6 +342,44 @@ jobs:
           patch -p1 < "$SYSUNAME_FILE" \
             || echo "::warning::sys.c_fix gagal diterapkan, lanjut."
 
+          # Gerbang keras konsistensi SUSFS/KSU: 10_enable yang setengah
+          # gagal + overlay yang "sukses" di atas base yang salah = kernel
+          # ter-link tapi init flow tidak koheren -> panic saat boot
+          # (kasus: 6/8 hunk init.c + Kbuild + dispatch + supercall + sucompat
+          # FAILED). Gagalkan build di sini dengan pesan jelas, JANGAN
+          # lanjutkan menjadi kernel Frankenstein yang tidak bisa boot.
+          # Catatan: reject 10_enable sudah diarsipkan ke rej-pre-overlay/
+          # (path relatif dipertahankan), reject overlay tetap di tree.
+          echo "=== Verifikasi konsistensi patch SUSFS/KSU ==="
+          REJ_CRIT=0
+          for r in \
+            "$KSUN_DIR/kernel/core/init.c.rej" \
+            "$KSUN_DIR/kernel/Kbuild.rej" \
+            "$KSUN_DIR/kernel/supercall/dispatch.c.rej" \
+            "$KSUN_DIR/kernel/supercall/supercall.c.rej" \
+            "$KSUN_DIR/kernel/feature/sucompat.c.rej" \
+            "$KSUN_DIR/kernel/hook/setuid_hook.c.rej" \
+            "$KSUN_DIR/kernel/feature/kernel_umount.c.rej" \
+          ; do
+            if [ -f "$r" ]; then
+              echo "::error::Reject kritis (overlay): $r"
+              REJ_CRIT=1
+            fi
+            if [ -f "rej-pre-overlay/$r" ]; then
+              echo "::error::Reject kritis (10_enable): rej-pre-overlay/$r"
+              REJ_CRIT=1
+            fi
+          done
+          if ! grep -rq "susfs_init" "$KSUN_DIR/kernel/" 2>/dev/null; then
+            echo "::error::susfs_init tidak ditemukan di $KSUN_DIR/kernel/ — wiring SUSFS hilang."
+            REJ_CRIT=1
+          fi
+          if [ "$REJ_CRIT" -eq 1 ]; then
+            echo "::error::Patch SUSFS/KSU tidak konsisten (upstream skew) — build dihentikan agar tidak menghasilkan kernel yang tidak bisa boot. Cek artifact rej-*.zip + upstream-shas."
+            exit 1
+          fi
+          echo "[+] Konsistensi patch SUSFS/KSU OK."
+
       - name: Apply Optimization & Network Patches
         shell: bash
         run: |
