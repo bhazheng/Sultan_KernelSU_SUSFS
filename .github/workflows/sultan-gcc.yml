@@ -318,7 +318,6 @@ jobs:
           OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
           if [ -f "$GITHUB_WORKSPACE/next-susfs-fixup.patch" ]; then
             echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
-            cp "$GITHUB_WORKSPACE/next-susfs-fixup.patch" "$OVERLAY_FILE"
           elif [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" ]; then
             echo "[+] Menggunakan next-susfs-fixup-v1.2.patch lokal dari repository..."
             cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" "$OVERLAY_FILE"
