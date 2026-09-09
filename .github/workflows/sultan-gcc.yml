@@ -318,6 +318,19 @@ jobs:
             exit 1
           }
 
+          # Compat KernelSU-Next v3.3.0+: overlay menghapus late-load mode di
+          # core/init.c, tapi dispatch.c masih membaca ksu_late_loaded di
+          # do_get_info() dengan deklarasi yang tak terlihat saat built-in
+          # (makro MODULE tak terdefinisi) -> error 'undeclared identifier'.
+          # Di tree ini MODULES=n (INTEGRATE_MODULES=y) sehingga LKM mustahil
+          # dan nilainya selalu false — netralkan referensinya secara aman.
+          DISPATCH="$KSUN_DIR/kernel/supercall/dispatch.c"
+          if [ -f "$DISPATCH" ] && grep -q "ksu_late_loaded" "$DISPATCH"; then
+            echo "[+] Menetralkan referensi ksu_late_loaded di $DISPATCH (built-in => selalu false)..."
+            sed -i 's/\bksu_late_loaded\b/false/g' "$DISPATCH"
+          fi
+          grep -rn "ksu_late_loaded" "$KSUN_DIR/kernel/" || echo "[+] OK: tidak ada referensi ksu_late_loaded tersisa."
+
           # Sys-uname hook (remote, shiba-adapted): wiring susfs_spoof_uname()
           # ke syscall newuname (SPOOF_UNAME default y). Konteks disesuaikan
           # untuk sys.c pasca-50_add shiba (tanpa blok is_gms stock).
