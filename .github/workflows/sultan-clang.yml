@@ -506,12 +506,14 @@ jobs:
           # (Mencegah YAML menambahkan spasi di depan kata "CONFIG_")
           # ---------------------------------------------------------
           # Sultan defconfig secara default menyetel CONFIG_LTO_GCC=y.
-          # Untuk Clang, GCC LTO wajib dimatikan dan diganti dengan CONFIG_LTO_NONE=y
-          # agar Makefile Sultan tidak meng-override AR/NM ke gcc-ar/gcc-nm dan tidak
-          # memicu loop dependensi konfigurasi Kbuild.
+          # Untuk Clang, GCC LTO wajib dimatikan dan diganti dengan
+          # CONFIG_LTO_CLANG_THIN=y (ThinLTO standar GKI — LTO_NONE tak bisa
+          # me-link tree ini: dead code ECT tak ter-GC) agar Makefile Sultan
+          # tidak meng-override AR/NM ke gcc-ar/gcc-nm dan tidak memicu
+          # loop dependensi konfigurasi Kbuild.
           sed -i 's/CONFIG_LTO_GCC=y/# CONFIG_LTO_GCC is not set/' "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
           {
-            echo "CONFIG_LTO_NONE=y"
+            echo "CONFIG_LTO_CLANG_THIN=y"
             echo "CONFIG_TMPFS_XATTR=y"
             echo "CONFIG_TMPFS_POSIX_ACL=y"
             echo "CONFIG_IP_NF_TARGET_TTL=y"
@@ -630,16 +632,15 @@ jobs:
           chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
           export PATH="$HOME/.ccache-bin:$PATH"
           export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
-          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
-          # FolkPatch: LDFLAGS_vmlinux+=--undefined=... adalah SATU token
-          # (tanpa spasi) agar selamat dari ekspansi `make $MAKE_ARGS` yang
-          # tak dikutip ulang; --undefined= (bentuk =, bukan -u <simbol>)
-          # wajib karena pemisah spasi akan diartikan sebagai target make.
-          # ld.lld menerima --undefined= langsung (tanpa wrapper gcc-ld);
-          # flag hanya dikonsumsi link vmlinux, target config mengabaikan.
-          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
-            MAKE_ARGS="$MAKE_ARGS LDFLAGS_vmlinux+=--undefined=memblock_free"
-          fi
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0 LDFLAGS_vmlinux+=--undefined=memblock_free"
+          # LDFLAGS_vmlinux+=--undefined=... adalah SATU token (tanpa spasi)
+          # agar selamat dari ekspansi `make $MAKE_ARGS` yang tak dikutip
+          # ulang; --undefined= (bentuk =, bukan -u <simbol>) wajib karena
+          # pemisah spasi akan diartikan sebagai target make. ld.lld menerima
+          # --undefined= langsung (tanpa wrapper gcc-ld); flag hanya
+          # dikonsumsi link vmlinux, target config mengabaikan. Global untuk
+          # semua varian: mempertahankan salinan kanonis memblock_free
+          # (dibutuhkan kptools FolkPatch; tak berpengaruh ke varian lain).
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
@@ -670,6 +671,8 @@ jobs:
           ./scripts/config --file "$CONFIG_FILE" \
             -d CONFIG_WERROR \
             -d CONFIG_LTO_GCC \
+            -d CONFIG_LTO_NONE \
+            -e CONFIG_LTO_CLANG_THIN \
             -e CONFIG_THREAD_INFO_IN_TASK \
             -e CONFIG_DEBUG_KERNEL \
             -e CONFIG_KALLSYMS \
@@ -678,21 +681,12 @@ jobs:
             -e CONFIG_FUSE_FS \
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
-          # FolkPatch: ThinLTO (bukan NONE) — tanpa LTO, dead code
-          # gs_tmu_throt_freq yang mereferensikan exynos_acme_ect_freq
+          # ThinLTO untuk SEMUA varian Clang (bukan NONE): tanpa LTO, dead
+          # code gs_tmu_throt_freq yang mereferensikan exynos_acme_ect_freq
           # (simbol absen di tree, skew import 56cf922a) dipertahankan
-          # linker lalu gagal (undefined reference). Dengan ThinLTO, dead
-          # code di-GC seperti build GCC-LTO; memblock_free dipertahankan
-          # untuk kptools via LDFLAGS_vmlinux+=--undefined (lihat MAKE_ARGS
-          # di atas). Varian lain tetap LTO_NONE (tak tersentuh).
-          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
-            ./scripts/config --file "$CONFIG_FILE" \
-              -d CONFIG_LTO_NONE \
-              -e CONFIG_LTO_CLANG_THIN
-          else
-            ./scripts/config --file "$CONFIG_FILE" \
-              -e CONFIG_LTO_NONE
-          fi
+          # linker lalu gagal (undefined reference) — ini menimpa NoRoot,
+          # Next, maupun FolkPatch. ThinLTO adalah standar GKI Android dan
+          # kombinasi yang terbukti dengan KernelSU-Next di Pixel.
 
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
@@ -707,17 +701,15 @@ jobs:
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) setelah olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
 
-          # Fail-fast LTO FolkPatch: olddefconfig diam-diam mengembalikan
-          # LTO_NONE bila dependensi ThinLTO tak terpenuhi (versi LLVM/lld).
-          # Tanpa ThinLTO, link pasti gagal di exynos_acme_ect_freq — gagalkan
-          # di sini (detik) daripada setelah build 20+ menit.
-          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
-            grep -q "^CONFIG_LTO_CLANG_THIN=y" "$CONFIG_FILE" || {
-              echo "::error::CONFIG_LTO_CLANG_THIN tidak aktif setelah olddefconfig (fallback ke NONE?) — cek HAS_LTO_CLANG/versi toolchain."
-              exit 1
-            }
-            echo "[+] ThinLTO aktif untuk FolkPatch."
-          fi
+          # Fail-fast ThinLTO: olddefconfig diam-diam mengembalikan LTO_NONE
+          # bila dependensi tak terpenuhi (versi LLVM/lld). Tanpa ThinLTO,
+          # link pasti gagal di exynos_acme_ect_freq — gagalkan di sini
+          # (detik) daripada setelah build 20+ menit.
+          grep -q "^CONFIG_LTO_CLANG_THIN=y" "$CONFIG_FILE" || {
+            echo "::error::CONFIG_LTO_CLANG_THIN tidak aktif setelah olddefconfig (fallback ke NONE?) — cek HAS_LTO_CLANG/versi toolchain."
+            exit 1
+          }
+          echo "[+] ThinLTO aktif."
 
           echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
           MISSING=0
