@@ -563,6 +563,56 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
+      - name: Apply FolkPatch ECT compat stub
+        if: ${{ matrix.variant == 'FolkPatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+
+          # Shim kompatibilitas untuk build non-LTO (FolkPatch mematikan LTO
+          # agar kptools mendapat nama simbol kanonis). BUKAN kode upstream.
+          #
+          # Skew upstream: import 56cf922a ("Import 'google-modules/soc/gs'
+          # from android-gs-caimito-6.1-android16") membawa gs_tmu_v3.c yang
+          # memanggil exynos_acme_ect_freq(), tetapi TIDAK ADA translation
+          # unit di tree ini yang mendefinisikannya (absen dari ect_parser.c
+          # maupun ect_parser.h).
+          #
+          # Build LTO lolos karena satu-satunya pemanggil,
+          # gs_tmu_throt_freq(), adalah dead code yang di-garbage-collect
+          # LTO; link polos mempertahankan fungsi itu lalu gagal
+          # (undefined reference + ASSERT GOT/PLT di vmlinux.lds.S).
+          # Stub ini tak pernah dieksekusi dalam praktik (ekuivalen dengan
+          # build LTO yang boot normal tanpa simbol ini). Hapus file dan
+          # baris Kbuild-nya bila upstream menyediakan simbol aslinya.
+          STUB_DIR="google-modules/soc/gs/drivers/thermal/samsung"
+          STUB_FILE="$STUB_DIR/gs_tmu_ect_compat_stub.c"
+          cat > "$STUB_FILE" << 'EOF'
+          // SPDX-License-Identifier: GPL-2.0-only
+          /*
+           * Compat shim for non-LTO builds — NOT upstream code. See workflow
+           * step "Apply FolkPatch ECT compat stub" for the full rationale.
+           * Remove once upstream provides exynos_acme_ect_freq().
+           */
+          #include <linux/types.h>
+
+          int exynos_acme_ect_freq(int cpu, u8 cdev_index)
+          {
+          	(void)cpu;
+          	(void)cdev_index;
+          	return 0;
+          }
+          EOF
+          grep -q 'gs_tmu_ect_compat_stub.o' "$STUB_DIR/Kbuild" || \
+            printf '%s\n' 'gs_thermal-y += gs_tmu_ect_compat_stub.o' >> "$STUB_DIR/Kbuild"
+
+          # Verifikasi pemasangan (link vmlinux adalah bukti final).
+          head -n 1 "$STUB_FILE" | grep -q 'SPDX'
+          grep -q 'exynos_acme_ect_freq' "$STUB_FILE"
+          grep -q 'gs_tmu_ect_compat_stub.o' "$STUB_DIR/Kbuild"
+          echo "[+] ECT compat stub terpasang untuk FolkPatch."
+
       - name: Build the Kernel
         shell: bash
         run: |
