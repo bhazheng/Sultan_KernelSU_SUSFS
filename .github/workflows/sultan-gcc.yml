@@ -603,6 +603,16 @@ jobs:
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
 
+          # FolkPatch/kptools butuh nama simbol kanonis: LTO GCC me-rename
+          # fungsi kecil menjadi .lto_priv/.constprop bahkan inline penuh
+          # (kasus: memblock_free hilang -> get_symbol_offset_exit fatal).
+          # Matikan LTO hanya untuk varian FolkPatch; varian lain tak tersentuh.
+          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
+            ./scripts/config --file "$CONFIG_FILE" \
+              -d CONFIG_LTO_GCC \
+              -e CONFIG_LTO_NONE
+          fi
+
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
 
