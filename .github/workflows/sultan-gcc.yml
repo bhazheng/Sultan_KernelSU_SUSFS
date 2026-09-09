@@ -21,21 +21,15 @@ on:
         required: true
         default: "6.1"
         type: string
-      folkpatch_superkey:
-        description: "Superkey FolkPatch/KernelPatch (opsional jika secret FOLKPATCH_SUPERKEY sudah diisi di repo settings)"
-        required: false
-        default: ""
-        type: string
       variants:
         description: "Varian yang di-build"
         required: false
-        default: '["KernelSU-Next", "NoRoot", "FolkPatch"]'
+        default: '["KernelSU-Next", "NoRoot"]'
         type: choice
         options:
-          - '["KernelSU-Next", "NoRoot", "FolkPatch"]'
+          - '["KernelSU-Next", "NoRoot"]'
           - '["KernelSU-Next"]'
           - '["NoRoot"]'
-          - '["FolkPatch"]'
   workflow_call:
     inputs:
       codename:
@@ -47,15 +41,11 @@ on:
       kernel_version:
         required: true
         type: string
-      folkpatch_superkey:
-        required: false
-        default: ""
-        type: string
       variants:
         description: "Varian yang di-build (JSON array)"
         required: false
         type: string
-        default: '["KernelSU-Next", "NoRoot", "FolkPatch"]'
+        default: '["KernelSU-Next", "NoRoot"]'
 
 jobs:
   build-kernel-sultan-kernelsu-susfs:
@@ -513,7 +503,7 @@ jobs:
             echo "CONFIG_NOMOUNT=y"
           } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
           # Simbol KSU/SUSFS — hanya untuk KernelSU-Next
-          # (NoRoot/FolkPatch tidak membawa drivers/kernelsu maupun patch SUSFS):
+          # (NoRoot tidak membawa drivers/kernelsu maupun patch SUSFS):
           # KSU + SUSFS aktif, SUS_SU dimatikan eksplisit, sisanya default upstream.
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             {
@@ -561,13 +551,6 @@ jobs:
           export KCFLAGS="-Wno-error=designated-init -Wno-designated-init -Wno-unused-value -Wno-error=unused-value"
           MAKE_ARGS="CC=$CC_COMPILER CROSS_COMPILE=$TOOLCHAIN_PREFIX WERROR=0"
 
-          # FolkPatch: pastikan memblock_free & memblock_reserve tidak di-inline atau di-rename oleh GCC LTO
-          # agar kptools selalu menemukan simbol kanonis, tanpa memicu error GOT/PLT akibat non-LTO memblock.o.
-          if [ -f "mm/memblock.c" ]; then
-            sed -i 's/void __init_memblock memblock_free(/void __init_memblock __attribute__((used, noinline)) memblock_free(/' mm/memblock.c || true
-            sed -i 's/int __init_memblock memblock_reserve(/int __init_memblock __attribute__((used, noinline)) memblock_reserve(/' mm/memblock.c || true
-          fi
-
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
 
@@ -585,7 +568,7 @@ jobs:
           # HAVE_KPROBES adalah simbol select-only milik arch, bukan untuk diset manual.
           # Blok KSU: paksa KSU + SUSFS aktif, SUS_SU mati
           # (koheren dengan blok defconfig minimal di atas; sisanya default upstream).
-          # Blok KSU hanya untuk varian root — NoRoot/FolkPatch tidak ada drivers/kernelsu di tree.)
+          # Blok KSU hanya untuk varian root — NoRoot tidak ada drivers/kernelsu di tree.)
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             ./scripts/config --file "$CONFIG_FILE" \
               -e CONFIG_KSU \
@@ -604,17 +587,6 @@ jobs:
             -e CONFIG_FUSE_FS \
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
-
-          # FolkPatch/kptools butuh nama simbol kanonis: LTO GCC me-rename
-          # fungsi kecil menjadi .lto_priv/.constprop bahkan inline penuh
-          # (kasus: memblock_free hilang -> get_symbol_offset_exit fatal).
-          # LTO BIAYA TETAP AKTIF (tanpa LTO, dead code gs_tmu_throt_freq
-          # yang mereferensikan exynos_acme_ect_freq — simbol yang absen di
-          # tree, skew import 56cf922a — dipertahankan linker lalu gagal
-          # dengan undefined reference + ASSERT GOT/PLT). Sebagai gantinya,
-          # HANYA mm/memblock.o dikompilasi tanpa LTO (lihat CFLAGS di
-          # MAKE_ARGS pada step Build): memblock_free/memblock_reserve
-          # tetap kanonis untuk kptools, dead code ECT tetap di-GC oleh LTO.
 
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
@@ -639,7 +611,7 @@ jobs:
           else
             echo "::notice::CONFIG_KPROBES nonaktif — ekspektasi Sultan (INTEGRATE_MODULES=y => MODULES=n => KPROBES=n)."
           fi
-          # Varian non-root (NoRoot/FolkPatch) tidak membawa KSU — pemeriksaan ini dilewati
+          # Varian non-root (NoRoot) tidak membawa KSU — pemeriksaan ini dilewati
           # (ketidakhadiran KSU justru ekspektasi yang benar).
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
@@ -663,17 +635,6 @@ jobs:
             exit 1
           fi
 
-          # Fail-fast LTO FolkPatch: LTO wajib AKTIF (tanpa LTO, link pasti
-          # gagal di exynos_acme_ect_freq — dead code tak ter-GC). Gagalkan
-          # di sini (detik) daripada setelah build 20+ menit.
-          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
-            grep -q "^CONFIG_LTO_GCC=y" "$CONFIG_FILE" || {
-              echo "::error::CONFIG_LTO_GCC tidak aktif setelah olddefconfig — link FolkPatch pasti gagal. Cek defconfig."
-              exit 1
-            }
-            echo "[+] LTO GCC aktif untuk FolkPatch (memblock_free/reserve noinline agar simbol kanonis)."
-          fi
-
           # 3. Kompilasi Paralel
           make $MAKE_ARGS LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
@@ -683,217 +644,6 @@ jobs:
 
           # Statistik ccache untuk log (tak menggagalkan build).
           ccache -s || true
-
-      - name: Embed KernelPatch for FolkPatch
-        if: ${{ matrix.variant == 'FolkPatch' }}
-        shell: bash
-        env:
-          FOLKPATCH_KEY_SECRET: ${{ secrets.FOLKPATCH_SUPERKEY }}
-          FOLKPATCH_KEY_INPUT: ${{ inputs.folkpatch_superkey }}
-          APATCH_KEY_SECRET: ${{ secrets.APATCH_SUPERKEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Superkey: secret FOLKPATCH_SUPERKEY > input folkpatch_superkey > secret APATCH_SUPERKEY > gagal.
-          SUPERKEY="${FOLKPATCH_KEY_SECRET:-}"
-          if [ -z "$SUPERKEY" ]; then
-            SUPERKEY="${FOLKPATCH_KEY_INPUT:-}"
-          fi
-          if [ -z "$SUPERKEY" ]; then
-            SUPERKEY="${APATCH_KEY_SECRET:-}"
-          fi
-          if [ -z "$SUPERKEY" ]; then
-            echo "::error::Superkey FolkPatch kosong! Isi secret FOLKPATCH_SUPERKEY di repo settings atau input folkpatch_superkey."
-            exit 1
-          fi
-          echo "::add-mask::$SUPERKEY"
-          echo "[+] Superkey FolkPatch diterima (disembunyikan dari log)."
-
-          retry() {
-            local n=0
-            until [ "$n" -ge 5 ]; do
-              "$@" && return 0
-              n=$((n+1))
-              echo "retry $n/5 failed for: $*" >&2
-              sleep 5
-            done
-            return 1
-          }
-
-          # Unduh kptools-linux + kpimg-android khusus dari LyraVoid/KernelPatch (FolkPatch engine)
-          TOOLS_DIR="$GITHUB_WORKSPACE/kptools"
-          mkdir -p "$TOOLS_DIR"
-          cd "$TOOLS_DIR"
-          retry python3 - << 'EOF'
-          import os, sys, json, urllib.request
-
-          token = os.environ.get("GH_TOKEN", "")
-          headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/vnd.github+json"}
-          if token:
-              headers["Authorization"] = f"Bearer {token}"
-
-          repo = "LyraVoid/KernelPatch"
-          print(f"[+] Mengunduh KernelPatch dari https://github.com/{repo} ...")
-
-          rel = None
-          try:
-              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest", headers=headers)
-              with urllib.request.urlopen(req, timeout=20) as resp:
-                  rel = json.loads(resp.read().decode("utf-8"))
-          except Exception as e:
-              print(f"[!] Warning: Gagal query releases/latest {repo}: {e}")
-              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=5", headers=headers)
-              with urllib.request.urlopen(req, timeout=20) as resp:
-                  r_list = json.loads(resp.read().decode("utf-8"))
-                  non_draft = [r for r in r_list if not r.get("draft")]
-                  if non_draft:
-                      rel = non_draft[0]
-
-          if not rel:
-              print(f"::error::Tidak ada rilis KernelPatch yang ditemukan di https://github.com/{repo}!")
-              sys.exit(1)
-
-          print(f"[+] KernelPatch {rel.get('tag_name')} — {rel.get('name')} (dari {repo})")
-          assets = rel.get("assets", [])
-
-          def find(exact, *subs):
-              for a in assets:
-                  if a["name"] == exact:
-                      return a
-              for a in assets:
-                  n = a["name"].lower()
-                  if all(s in n for s in subs):
-                      return a
-              return None
-
-          kt = find("kptools-linux", "kptools", "linux")
-          ki = find("kpimg-android", "kpimg")
-          missing = [label for obj, label in ((kt, "kptools-linux"), (ki, "kpimg-android")) if obj is None]
-          if missing:
-              print(f"::error::Asset KernelPatch tidak ditemukan di {repo}: {', '.join(missing)}")
-              print("Asset tersedia: " + ", ".join(a["name"] for a in assets))
-              sys.exit(1)
-
-          def dl(asset, dest):
-              req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "Mozilla/5.0"})
-              with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
-                  f.write(r.read())
-              print(f"[+] {asset['name']} -> {dest}")
-
-          try:
-              dl(kt, "kptools.prebuilt")
-              cp_cmd = f"cp -f kptools.prebuilt kptools"
-              os.system(cp_cmd)
-              dl(ki, "kpimg")
-          except Exception as e:
-              print(f"::error::Gagal mengunduh asset KernelPatch dari {repo}: {e}")
-              sys.exit(1)
-          EOF
-
-          # -------------------------------------------------------------
-          # Opsi 1: Build & Patch kptools dari Source (LyraVoid/KernelPatch)
-          # Mendukung parsing offset kallsyms dari System.map agar patch kernel
-          # 6.1+ / Sultan tidak gagal pada analisis token table / token index.
-          # -------------------------------------------------------------
-          echo "[+] Membangun kptools kustom dari source (LyraVoid/KernelPatch)..."
-          rm -rf "$GITHUB_WORKSPACE/KernelPatch-src"
-          if git clone --depth 1 https://github.com/LyraVoid/KernelPatch.git "$GITHUB_WORKSPACE/KernelPatch-src"; then
-            PATCH_APPLIED=0
-            if [ -f "$GITHUB_WORKSPACE/kptools-system-map.patch" ]; then
-              if patch -d "$GITHUB_WORKSPACE/KernelPatch-src" -p1 < "$GITHUB_WORKSPACE/kptools-system-map.patch"; then
-                echo "[+] kptools-system-map.patch berhasil diterapkan ke source kptools!"
-                PATCH_APPLIED=1
-              fi
-            fi
-            if [ "$PATCH_APPLIED" -eq 0 ] && [ -f "$GITHUB_WORKSPACE/patch_kptools.py" ]; then
-              echo "[+] Menerapkan patch System.map ke kallsym.c via patch_kptools.py..."
-              python3 "$GITHUB_WORKSPACE/patch_kptools.py" "$GITHUB_WORKSPACE/KernelPatch-src/tools/kallsym.c" || true
-            fi
-            # Salin preset.h dan header kernel ke tools/ agar include 'preset.h' pada patch.h berhasil
-            mkdir -p "$GITHUB_WORKSPACE/KernelPatch-src/tools"
-            if [ -f "$GITHUB_WORKSPACE/KernelPatch-src/kernel/include/preset.h" ]; then
-              cp -f "$GITHUB_WORKSPACE/KernelPatch-src/kernel/include/preset.h" "$GITHUB_WORKSPACE/KernelPatch-src/tools/preset.h"
-            fi
-            find "$GITHUB_WORKSPACE/KernelPatch-src" -name "preset.h" -exec cp -f {} "$GITHUB_WORKSPACE/KernelPatch-src/tools/" \; 2>/dev/null || true
-            make -C "$GITHUB_WORKSPACE/KernelPatch-src/kernel" hdr 2>/dev/null || true
-
-            COMPILED=0
-            if make -C "$GITHUB_WORKSPACE/KernelPatch-src/tools" -j"$(nproc)"; then
-              cp -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/kptools" "$TOOLS_DIR/kptools"
-              chmod +x "$TOOLS_DIR/kptools"
-              COMPILED=1
-            elif command -v cmake >/dev/null 2>&1; then
-              echo "[+] Mencoba kompilasi kptools via CMake..."
-              cmake -B "$GITHUB_WORKSPACE/KernelPatch-src/tools/build" "$GITHUB_WORKSPACE/KernelPatch-src/tools"
-              cmake --build "$GITHUB_WORKSPACE/KernelPatch-src/tools/build" -j"$(nproc)"
-              if [ -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/build/kptools" ]; then
-                cp -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/build/kptools" "$TOOLS_DIR/kptools"
-                chmod +x "$TOOLS_DIR/kptools"
-                COMPILED=1
-              fi
-            fi
-
-            if [ "$COMPILED" -eq 1 ]; then
-              echo "[+] Berhasil mengompilasi kptools kustom dengan dukungan System.map!"
-            else
-              echo "::warning::Kompilasi kptools source gagal, tetap menggunakan biner prebuilt sebagai fallback."
-            fi
-          else
-            echo "::warning::Gagal clone LyraVoid/KernelPatch, tetap menggunakan biner prebuilt sebagai fallback."
-          fi
-          chmod +x "$TOOLS_DIR/kptools"
-          echo "--- versi kptools (diagnostik, tanpa key) ---"
-          "$TOOLS_DIR/kptools" -h 2>&1 | head -40 || true
-
-          # Patch file Image MENTAH hasil build (kptools bekerja pada image tanpa
-          # kompresi). Image.lz4 basi dihapus agar langkah ZIP kompres ulang dari
-          # Image yang sudah ter-patch.
-          cd "$GITHUB_WORKSPACE/$CONFIG"
-          IMAGE=""
-          for f in "out/arch/arm64/boot/Image" "arch/arm64/boot/Image"; do
-            if [ -s "$f" ]; then
-              IMAGE="$f"
-              break
-            fi
-          done
-          if [ -z "$IMAGE" ]; then
-            echo "::error::File Image mentah tidak ditemukan (out/arch/arm64/boot/Image)!"
-            exit 1
-          fi
-          echo "=== Diagnostik pra-kptools (Image mentah) ==="
-          ls -la "$IMAGE" || true
-          stat -c "size=%s bytes" "$IMAGE" || true
-          file "$IMAGE" || true
-          head -c 64 "$IMAGE" | od -A x -t x1z || true
-
-          # Ekstrak offset simbol System.map dan sesuaikan header Image jika non-EFI
-          MAPS_FOUND=""
-          for m in "out/System.map" "System.map"; do
-            if [ -s "$m" ]; then
-              MAPS_FOUND="$PWD/$m"
-              break
-            fi
-          done
-          if [ -n "$MAPS_FOUND" ] && [ -f "$GITHUB_WORKSPACE/extract_kallsyms.py" ]; then
-            export SYSTEM_MAP="$MAPS_FOUND"
-            echo "[+] System.map terdeteksi di: $SYSTEM_MAP"
-            python3 "$GITHUB_WORKSPACE/extract_kallsyms.py" "$IMAGE" "$SYSTEM_MAP" > /tmp/kallsyms_env.sh
-            if [ -s /tmp/kallsyms_env.sh ]; then
-              echo "[+] Mengimpor offset kallsyms dari System.map ke environment:"
-              cat /tmp/kallsyms_env.sh
-              source /tmp/kallsyms_env.sh
-            fi
-          fi
-
-          echo "[+] Patching $IMAGE dengan KernelPatch (FolkPatch)..."
-          "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -o "$IMAGE.patched"
-          if [ ! -s "$IMAGE.patched" ]; then
-            echo "::error::kptools gagal menghasilkan Image ter-patch!"
-            exit 1
-          fi
-          mv -f "$IMAGE.patched" "$IMAGE"
-          rm -f "$(dirname "$IMAGE")/Image.lz4"
-          echo "[+] KernelPatch (FolkPatch) tertanam ke $IMAGE (Image.lz4 basi dihapus; langkah ZIP akan kompres ulang)."
 
       - name: Copy Images & Create ZIP
         shell: bash
@@ -954,11 +704,10 @@ jobs:
           EOF
 
       - name: Fetch Manager APK
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
+        if: ${{ matrix.variant == 'KernelSU-Next' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -970,11 +719,7 @@ jobs:
           if token:
               headers["Authorization"] = f"token {token}"
 
-          variant = os.environ.get("VARIANT", "")
-          if variant == "FolkPatch":
-              repo = "LyraVoid/FolkPatch"
-          else:
-              repo = "KernelSU-Next/KernelSU-Next"
+          repo = "KernelSU-Next/KernelSU-Next"
 
           try:
               req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=1", headers=headers)
@@ -1015,7 +760,7 @@ jobs:
             ${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload Manager APK Artifact
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
+        if: ${{ matrix.variant == 'KernelSU-Next' }}
         uses: actions/upload-artifact@v4
         with:
           name: Manager-APK-${{ inputs.codename }}-${{ matrix.variant }}-gcc
