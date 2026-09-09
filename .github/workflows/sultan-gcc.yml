@@ -316,14 +316,8 @@ jobs:
 
           OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
           OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
-          if [ -f "$GITHUB_WORKSPACE/next-susfs-fixup.patch" ]; then
-            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
-          elif [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" ]; then
-            echo "[+] Menggunakan next-susfs-fixup-v1.2.patch lokal dari repository..."
-            cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" "$OVERLAY_FILE"
-          elif [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" ]; then
-            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
-            cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" "$OVERLAY_FILE"
+          if [ -f "$OVERLAY_FILE" ]; then
+            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari root repositori..."
           else
             echo "[+] Mengunduh next-susfs-fixup.patch dari remote..."
             curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
