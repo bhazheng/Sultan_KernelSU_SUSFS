@@ -419,7 +419,7 @@
 # (mekanisme sulog diganti pending-event di implementasi baru).
 --- a/kernel/feature/sucompat.c
 +++ b/kernel/feature/sucompat.c
-@@ -24,28 +24,36 @@
+@@ -24,28 +24,34 @@
  #include "klog.h" // IWYU pragma: keep
  #include "runtime/ksud.h"
  #include "feature/sucompat.h"
@@ -445,10 +445,7 @@
  static int su_compat_feature_get(u64 *value)
  {
 -	*value = ksu_su_compat_enabled ? 1 : 0;
-+    if (static_key_enabled(&ksu_su_compat_enabled))
-+        *value = 1;
-+    else
-+        *value = 0;
++	*value = static_key_enabled(&ksu_su_compat_enabled) ? 1 : 0;
  	return 0;
  }
  
@@ -456,10 +453,11 @@
  {
  	bool enable = value != 0;
 -	ksu_su_compat_enabled = enable;
-+    if (enable)
-+        static_branch_enable(&ksu_su_compat_enabled);
-+    else
-+        static_branch_disable(&ksu_su_compat_enabled);
++	if (enable) {
++		static_branch_enable(&ksu_su_compat_enabled);
++	} else {
++		static_branch_disable(&ksu_su_compat_enabled);
++	}
  	pr_info("su_compat: set to %d\n", enable);
  	return 0;
  }
