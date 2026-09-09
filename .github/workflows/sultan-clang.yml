@@ -602,57 +602,6 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-      - name: Apply FolkPatch ECT compat stub
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$CONFIG"
-
-          # Shim kompatibilitas untuk build non-LTO (workflow Clang memakai
-          # CONFIG_LTO_NONE untuk SEMUA varian; FolkPatch butuh simbol
-          # kanonis untuk kptools). Berlaku untuk semua varian Clang.
-          # BUKAN kode upstream.
-          #
-          # Skew upstream: import 56cf922a ("Import 'google-modules/soc/gs'
-          # from android-gs-caimito-6.1-android16") membawa gs_tmu_v3.c yang
-          # memanggil exynos_acme_ect_freq(), tetapi TIDAK ADA translation
-          # unit di tree ini yang mendefinisikannya (absen dari ect_parser.c
-          # maupun ect_parser.h).
-          #
-          # Build LTO lolos karena satu-satunya pemanggil,
-          # gs_tmu_throt_freq(), adalah dead code yang di-garbage-collect
-          # LTO; link polos mempertahankan fungsi itu lalu gagal
-          # (undefined reference + ASSERT GOT/PLT di vmlinux.lds.S).
-          # Stub ini tak pernah dieksekusi dalam praktik (ekuivalen dengan
-          # build LTO yang boot normal tanpa simbol ini). Hapus file dan
-          # baris Kbuild-nya bila upstream menyediakan simbol aslinya.
-          STUB_DIR="google-modules/soc/gs/drivers/thermal/samsung"
-          STUB_FILE="$STUB_DIR/gs_tmu_ect_compat_stub.c"
-          cat > "$STUB_FILE" << 'EOF'
-          // SPDX-License-Identifier: GPL-2.0-only
-          /*
-           * Compat shim for non-LTO builds — NOT upstream code. See workflow
-           * step "Apply FolkPatch ECT compat stub" for the full rationale.
-           * Remove once upstream provides exynos_acme_ect_freq().
-           */
-          #include <linux/types.h>
-
-          int exynos_acme_ect_freq(int cpu, u8 cdev_index)
-          {
-          	(void)cpu;
-          	(void)cdev_index;
-          	return 0;
-          }
-          EOF
-          grep -q 'gs_tmu_ect_compat_stub.o' "$STUB_DIR/Kbuild" || \
-            printf '%s\n' 'gs_thermal-y += gs_tmu_ect_compat_stub.o' >> "$STUB_DIR/Kbuild"
-
-          # Verifikasi pemasangan (link vmlinux adalah bukti final).
-          head -n 1 "$STUB_FILE" | grep -q 'SPDX'
-          grep -q 'exynos_acme_ect_freq' "$STUB_FILE"
-          grep -q 'gs_tmu_ect_compat_stub.o' "$STUB_DIR/Kbuild"
-          echo "[+] ECT compat stub terpasang."
-
       - name: Build the Kernel
         shell: bash
         run: |
@@ -682,6 +631,15 @@ jobs:
           export PATH="$HOME/.ccache-bin:$PATH"
           export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
           MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
+          # FolkPatch: LDFLAGS_vmlinux+=--undefined=... adalah SATU token
+          # (tanpa spasi) agar selamat dari ekspansi `make $MAKE_ARGS` yang
+          # tak dikutip ulang; --undefined= (bentuk =, bukan -u <simbol>)
+          # wajib karena pemisah spasi akan diartikan sebagai target make.
+          # ld.lld menerima --undefined= langsung (tanpa wrapper gcc-ld);
+          # flag hanya dikonsumsi link vmlinux, target config mengabaikan.
+          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
+            MAKE_ARGS="$MAKE_ARGS LDFLAGS_vmlinux+=--undefined=memblock_free"
+          fi
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
@@ -712,7 +670,6 @@ jobs:
           ./scripts/config --file "$CONFIG_FILE" \
             -d CONFIG_WERROR \
             -d CONFIG_LTO_GCC \
-            -e CONFIG_LTO_NONE \
             -e CONFIG_THREAD_INFO_IN_TASK \
             -e CONFIG_DEBUG_KERNEL \
             -e CONFIG_KALLSYMS \
@@ -721,6 +678,21 @@ jobs:
             -e CONFIG_FUSE_FS \
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
+          # FolkPatch: ThinLTO (bukan NONE) — tanpa LTO, dead code
+          # gs_tmu_throt_freq yang mereferensikan exynos_acme_ect_freq
+          # (simbol absen di tree, skew import 56cf922a) dipertahankan
+          # linker lalu gagal (undefined reference). Dengan ThinLTO, dead
+          # code di-GC seperti build GCC-LTO; memblock_free dipertahankan
+          # untuk kptools via LDFLAGS_vmlinux+=--undefined (lihat MAKE_ARGS
+          # di atas). Varian lain tetap LTO_NONE (tak tersentuh).
+          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
+            ./scripts/config --file "$CONFIG_FILE" \
+              -d CONFIG_LTO_NONE \
+              -e CONFIG_LTO_CLANG_THIN
+          else
+            ./scripts/config --file "$CONFIG_FILE" \
+              -e CONFIG_LTO_NONE
+          fi
 
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
@@ -734,6 +706,18 @@ jobs:
 
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) setelah olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
+
+          # Fail-fast LTO FolkPatch: olddefconfig diam-diam mengembalikan
+          # LTO_NONE bila dependensi ThinLTO tak terpenuhi (versi LLVM/lld).
+          # Tanpa ThinLTO, link pasti gagal di exynos_acme_ect_freq — gagalkan
+          # di sini (detik) daripada setelah build 20+ menit.
+          if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
+            grep -q "^CONFIG_LTO_CLANG_THIN=y" "$CONFIG_FILE" || {
+              echo "::error::CONFIG_LTO_CLANG_THIN tidak aktif setelah olddefconfig (fallback ke NONE?) — cek HAS_LTO_CLANG/versi toolchain."
+              exit 1
+            }
+            echo "[+] ThinLTO aktif untuk FolkPatch."
+          fi
 
           echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
           MISSING=0
