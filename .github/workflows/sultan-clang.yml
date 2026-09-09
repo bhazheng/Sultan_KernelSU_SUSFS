@@ -409,7 +409,13 @@ jobs:
           # MANUALLY INJECT DEFCONFIG MENGGUNAKAN BLOK ECHO
           # (Mencegah YAML menambahkan spasi di depan kata "CONFIG_")
           # ---------------------------------------------------------
+          # Sultan defconfig secara default menyetel CONFIG_LTO_GCC=y.
+          # Untuk Clang, GCC LTO wajib dimatikan dan diganti dengan CONFIG_LTO_NONE=y
+          # agar Makefile Sultan tidak meng-override AR/NM ke gcc-ar/gcc-nm dan tidak
+          # memicu loop dependensi konfigurasi Kbuild.
+          sed -i 's/CONFIG_LTO_GCC=y/# CONFIG_LTO_GCC is not set/' "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
           {
+            echo "CONFIG_LTO_NONE=y"
             echo "CONFIG_TMPFS_XATTR=y"
             echo "CONFIG_TMPFS_POSIX_ACL=y"
             echo "CONFIG_IP_NF_TARGET_TTL=y"
@@ -512,9 +518,10 @@ jobs:
 
           export ARCH=arm64
           export SUBARCH=arm64
-          export LLVM="$GITHUB_WORKSPACE/clang/bin/"
+          export LLVM=1
           export LLVM_IAS=1
           export CROSS_COMPILE=aarch64-linux-gnu-
+          unset CLANG_FLAGS
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
           if [ -d "$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin" ]; then
             export PATH="$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin:$PATH"
@@ -530,7 +537,7 @@ jobs:
           printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang++" > "$HOME/.ccache-bin/clang++"
           chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
           export PATH="$HOME/.ccache-bin:$PATH"
-          MAKE_ARGS="LLVM=$GITHUB_WORKSPACE/clang/bin/ LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu-"
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu-"
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
@@ -559,6 +566,8 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_KSU dilewati (tanpa root)."
           fi
           ./scripts/config --file "$CONFIG_FILE" \
+            -d CONFIG_LTO_GCC \
+            -e CONFIG_LTO_NONE \
             -e CONFIG_THREAD_INFO_IN_TASK \
             -e CONFIG_DEBUG_KERNEL \
             -e CONFIG_KALLSYMS \
@@ -614,6 +623,11 @@ jobs:
             grep -i "ksu" /tmp/olddefconfig.log || true
             exit 1
           fi
+
+          # Sinkronisasi konfigurasi eksplisit sebelum kompilasi untuk memastikan
+          # auto.conf, auto.conf.cmd, dan autoconf.h sinkron penuh dengan .config,
+          # mencegah loop rekursif syncconfig saat kompilasi paralel.
+          make $MAKE_ARGS syncconfig
 
           # 3. Kompilasi Paralel
           make $MAKE_ARGS LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
@@ -722,12 +736,44 @@ jobs:
               print(f"[+] {asset['name']} -> {dest}")
 
           try:
-              dl(kt, "kptools")
+              dl(kt, "kptools.prebuilt")
+              cp_cmd = f"cp -f kptools.prebuilt kptools"
+              os.system(cp_cmd)
               dl(ki, "kpimg")
           except Exception as e:
               print(f"::error::Gagal mengunduh asset KernelPatch dari {repo}: {e}")
               sys.exit(1)
           EOF
+
+          # -------------------------------------------------------------
+          # Opsi 1: Build & Patch kptools dari Source (LyraVoid/KernelPatch)
+          # Mendukung parsing offset kallsyms dari System.map agar patch kernel
+          # 6.1+ / Sultan tidak gagal pada analisis token table / token index.
+          # -------------------------------------------------------------
+          echo "[+] Membangun kptools kustom dari source (LyraVoid/KernelPatch)..."
+          rm -rf "$GITHUB_WORKSPACE/KernelPatch-src"
+          if git clone --depth 1 https://github.com/LyraVoid/KernelPatch.git "$GITHUB_WORKSPACE/KernelPatch-src"; then
+            PATCH_APPLIED=0
+            if [ -f "$GITHUB_WORKSPACE/patches/kptools-system-map.patch" ]; then
+              if patch -d "$GITHUB_WORKSPACE/KernelPatch-src" -p1 < "$GITHUB_WORKSPACE/patches/kptools-system-map.patch"; then
+                echo "[+] kptools-system-map.patch berhasil diterapkan ke source kptools!"
+                PATCH_APPLIED=1
+              fi
+            fi
+            if [ "$PATCH_APPLIED" -eq 0 ]; then
+              echo "[+] Menerapkan patch System.map ke kallsym.c via skrip python..."
+              python3 "$GITHUB_WORKSPACE/scripts/patch_kptools.py" "$GITHUB_WORKSPACE/KernelPatch-src/tools/kallsym.c" || true
+            fi
+            if make -C "$GITHUB_WORKSPACE/KernelPatch-src/tools" -j"$(nproc)"; then
+              cp -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/kptools" "$TOOLS_DIR/kptools"
+              chmod +x "$TOOLS_DIR/kptools"
+              echo "[+] Berhasil mengompilasi kptools kustom dengan dukungan System.map!"
+            else
+              echo "::warning::Kompilasi kptools source gagal, tetap menggunakan biner prebuilt sebagai fallback."
+            fi
+          else
+            echo "::warning::Gagal clone LyraVoid/KernelPatch, tetap menggunakan biner prebuilt sebagai fallback."
+          fi
           chmod +x "$TOOLS_DIR/kptools"
           echo "--- versi kptools (diagnostik, tanpa key) ---"
           "$TOOLS_DIR/kptools" -h 2>&1 | head -40 || true
@@ -753,34 +799,24 @@ jobs:
           file "$IMAGE" || true
           head -c 64 "$IMAGE" | od -A x -t x1z || true
 
-          # Diagnostik simbol kallsyms dari System.map untuk memverifikasi offset akurat
-          python3 - << 'EOF' "$IMAGE"
-          import sys, glob
-          img_path = sys.argv[1]
-          with open(img_path, "r+b") as f:
-              hdr = f.read(8)
-              if len(hdr) >= 8 and hdr[0:4] == b'\x1f\x20\x03\xd5' and (hdr[7] & 0xfc) == 0x14:
-                  print("[+] Terdeteksi Image ARM64 non-EFI (NOP di offset 0, branch di offset 4).")
-                  print("[+] Menyesuaikan 4 byte pertama dengan opcode ARM64 EFI MZ (ccmp x18, #0, #0xd, pl)...")
-                  f.seek(0)
-                  f.write(b'\x4d\x5a\x40\xfa')
-                  f.flush()
-                  print("[+] Header berhasil disesuaikan untuk kptools.")
-
-          # Cetak referensi simbol System.map bila tersedia
-          maps = glob.glob("out/System.map") + glob.glob("System.map")
-          if maps:
-              syms = {}
-              with open(maps[0], "r", errors="ignore") as mf:
-                  for line in mf:
-                      parts = line.strip().split()
-                      if len(parts) >= 3 and parts[2] in ("linux_banner", "kallsyms_token_table", "kallsyms_token_index", "kallsyms_markers", "kallsyms_names"):
-                          syms[parts[2]] = int(parts[0], 16)
-              if syms:
-                  print(f"[+] Simbol dari {maps[0]}:")
-                  for k, v in syms.items():
-                      print(f"    {k:22s}: 0x{v:016x}")
-          EOF
+          # Ekstrak offset simbol System.map dan sesuaikan header Image jika non-EFI
+          MAPS_FOUND=""
+          for m in "out/System.map" "System.map"; do
+            if [ -s "$m" ]; then
+              MAPS_FOUND="$PWD/$m"
+              break
+            fi
+          done
+          if [ -n "$MAPS_FOUND" ] && [ -f "$GITHUB_WORKSPACE/scripts/extract_kallsyms.py" ]; then
+            export SYSTEM_MAP="$MAPS_FOUND"
+            echo "[+] System.map terdeteksi di: $SYSTEM_MAP"
+            python3 "$GITHUB_WORKSPACE/scripts/extract_kallsyms.py" "$IMAGE" "$SYSTEM_MAP" > /tmp/kallsyms_env.sh
+            if [ -s /tmp/kallsyms_env.sh ]; then
+              echo "[+] Mengimpor offset kallsyms dari System.map ke environment:"
+              cat /tmp/kallsyms_env.sh
+              source /tmp/kallsyms_env.sh
+            fi
+          fi
 
           echo "[+] Patching $IMAGE dengan KernelPatch (FolkPatch)..."
           "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -o "$IMAGE.patched"
