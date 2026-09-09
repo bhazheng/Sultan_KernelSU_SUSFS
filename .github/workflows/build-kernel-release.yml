@@ -78,7 +78,7 @@ jobs:
         
         Module: 
         -> https://github.com/sidex15/ksu_module_susfs
-        -> NoMount metamodule (attached; for KSU variants & FolkPatch)
+        -> NoMount metamodule (attached; for all variants: Next / NoRoot / FolkPatch)
         
         Managers & Tooling:
         -> https://github.com/pershoot/KernelSU-Next (Next)
@@ -88,7 +88,7 @@ jobs:
         Features:
         [+] KernelSU-Next / FolkPatch
         [+] SUSFS (Next)
-        [+] NoMount (Next & FolkPatch)
+        [+] NoMount (Next / NoRoot / FolkPatch)
         [+] BBRV3
 
     steps:

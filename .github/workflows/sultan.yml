@@ -261,7 +261,6 @@ jobs:
           sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
-        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -273,7 +272,6 @@ jobs:
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
 
       - name: Build and Package NoMount Metamodule
-        if: ${{ matrix.variant != 'NoRoot' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -389,11 +387,15 @@ jobs:
             } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
           fi
 
-          # Varian NoRoot (tanpa root): lewati simbol NOMOUNT/KSU/SUSFS —
-          # tidak ada drivers/kernelsu maupun patch SUSFS/NoMount di tree.
+          # NoMount nol dependensi KSU/SUSFS — aktif untuk SEMUA varian termasuk NoRoot.
+          {
+            echo "CONFIG_NOMOUNT=y"
+          } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+
+          # Varian NoRoot (tanpa root): lewati simbol KSU/SUSFS —
+          # tidak ada drivers/kernelsu maupun patch SUSFS di tree.
           if [ "${{ matrix.variant }}" != "NoRoot" ]; then
             {
-              echo "CONFIG_NOMOUNT=y"
               echo "CONFIG_KSU=y"
               echo "CONFIG_KSU_SUSFS=y"
               echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
@@ -407,7 +409,7 @@ jobs:
               echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
             } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
           else
-            echo "[*] Varian NoRoot — injeksi NOMOUNT/KSU/SUSFS dilewati."
+            echo "[*] Varian NoRoot — injeksi KSU/SUSFS dilewati."
           fi
 
           sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
@@ -645,7 +647,6 @@ jobs:
             !${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload NoMount Metamodule Artifact
-        if: ${{ matrix.variant != 'NoRoot' }}
         uses: actions/upload-artifact@v4
         with:
           name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-gcc

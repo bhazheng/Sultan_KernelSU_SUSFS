@@ -369,7 +369,6 @@ jobs:
           done
 
       - name: Integrate NoMount
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -381,7 +380,6 @@ jobs:
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
 
       - name: Build and Package NoMount Metamodule
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -494,15 +492,11 @@ jobs:
             echo "CONFIG_FUSE_BPF=y"
           } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
 
-          # NoMount kompatibel dengan FolkPatch (customize.sh mendukung modding;
-          # nomount.c nol dependensi KSU/SUSFS) — hanya NoRoot yang melewatinya.
-          if [ "${{ matrix.variant }}" == "KernelSU-Next" ] || [ "${{ matrix.variant }}" == "FolkPatch" ]; then
-            {
-              echo "CONFIG_NOMOUNT=y"
-            } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
-          else
-            echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_NOMOUNT dilewati."
-          fi
+          # NoMount nol dependensi KSU/SUSFS (nomount.c + customize.sh modding) —
+          # aktif untuk SEMUA varian termasuk NoRoot.
+          {
+            echo "CONFIG_NOMOUNT=y"
+          } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
           # Simbol KSU/SUSFS — hanya untuk KernelSU-Next
           # (NoRoot/FolkPatch tidak membawa drivers/kernelsu maupun patch SUSFS):
           # KSU + SUSFS aktif, SUS_SU dimatikan eksplisit, sisanya default upstream.
@@ -975,7 +969,6 @@ jobs:
             !${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload NoMount Metamodule Artifact
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-clang
