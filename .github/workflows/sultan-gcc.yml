@@ -583,14 +583,18 @@ jobs:
           CC_COMPILER="$HOME/.ccache-bin/aarch64-linux-gcc"
           export KCFLAGS="-Wno-error=designated-init -Wno-designated-init -Wno-unused-value -Wno-error=unused-value"
           MAKE_ARGS="CC=$CC_COMPILER CROSS_COMPILE=$TOOLCHAIN_PREFIX WERROR=0"
-          # FolkPatch: LDFLAGS_vmlinux+=--undefined=... adalah SATU token
-          # (tanpa spasi) agar selamat dari ekspansi `make $MAKE_ARGS` yang
-          # tak dikutip ulang; --undefined= (bentuk =, bukan -u <simbol>)
-          # wajib karena pemisah spasi akan diartikan sebagai target make.
-          # Hanya dikonsumsi link vmlinux (export target-spesifik di top
-          # Makefile -> scripts/link-vmlinux.sh); target config abaikan.
+          # FolkPatch: CFLAGS_memblock.o=-fno-lto adalah SATU token (tanpa
+          # spasi) agar selamat dari ekspansi `make $MAKE_ARGS` yang tak
+          # dikutip ulang. Kbuild menghormati $(CFLAGS_$(target-stem).o)
+          # PALING AKHIR di scripts/Makefile.lib, sehingga -fno-lto menang
+          # atas -flto global HANYA untuk mm/memblock.o (variabel make
+          # command-line otomatis menurun ke sub-make). Hasil: satu-satunya
+          # TU non-LTO di seluruh build; memblock_free/memblock_reserve
+          # tetap kanonis untuk kptools, LTO global tetap meng-GC dead code
+          # ECT. Target config (defconfig/olddefconfig) mengabaikannya.
+          # FolkPatch-only: varian lain (sudah terbukti boot) tak tersentuh.
           if [ "${{ matrix.variant }}" == "FolkPatch" ]; then
-            MAKE_ARGS="$MAKE_ARGS LDFLAGS_vmlinux+=--undefined=memblock_free"
+            MAKE_ARGS="$MAKE_ARGS CFLAGS_memblock.o=-fno-lto"
           fi
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
@@ -637,10 +641,9 @@ jobs:
           # yang mereferensikan exynos_acme_ect_freq — simbol yang absen di
           # tree, skew import 56cf922a — dipertahankan linker lalu gagal
           # dengan undefined reference + ASSERT GOT/PLT). Sebagai gantinya,
-          # paksa linker mempertahankan salinan out-of-line kanonis via
-          # -u (diteruskan scripts/gcc-ld sebagai -Wl,-u): dead code tetap
-          # di-GC oleh LTO, memblock_free tetap ada untuk kptools.
-          # Diterapkan di MAKE_ARGS pada step Build (lihat di bawah).
+          # HANYA mm/memblock.o dikompilasi tanpa LTO (lihat CFLAGS di
+          # MAKE_ARGS pada step Build): memblock_free/memblock_reserve
+          # tetap kanonis untuk kptools, dead code ECT tetap di-GC oleh LTO.
 
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
@@ -697,7 +700,7 @@ jobs:
               echo "::error::CONFIG_LTO_GCC tidak aktif setelah olddefconfig — link FolkPatch pasti gagal. Cek defconfig."
               exit 1
             }
-            echo "[+] LTO GCC aktif untuk FolkPatch (keep-alive memblock_free via LDFLAGS_vmlinux)."
+            echo "[+] LTO GCC aktif untuk FolkPatch (mm/memblock.o non-LTO agar simbol kanonis)."
           fi
 
           # 3. Kompilasi Paralel

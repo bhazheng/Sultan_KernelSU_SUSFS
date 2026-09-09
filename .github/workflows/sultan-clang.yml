@@ -627,15 +627,17 @@ jobs:
           chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
           export PATH="$HOME/.ccache-bin:$PATH"
           export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
-          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0 LDFLAGS_vmlinux+=--undefined=memblock_free"
-          # LDFLAGS_vmlinux+=--undefined=... adalah SATU token (tanpa spasi)
-          # agar selamat dari ekspansi `make $MAKE_ARGS` yang tak dikutip
-          # ulang; --undefined= (bentuk =, bukan -u <simbol>) wajib karena
-          # pemisah spasi akan diartikan sebagai target make. ld.lld menerima
-          # --undefined= langsung (tanpa wrapper gcc-ld); flag hanya
-          # dikonsumsi link vmlinux, target config mengabaikan. Global untuk
-          # semua varian: mempertahankan salinan kanonis memblock_free
-          # (dibutuhkan kptools FolkPatch; tak berpengaruh ke varian lain).
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0 CFLAGS_memblock.o=-fno-lto"
+          # CFLAGS_memblock.o=-fno-lto adalah SATU token (tanpa spasi) agar
+          # selamat dari ekspansi `make $MAKE_ARGS` yang tak dikutip ulang.
+          # Kbuild menghormati $(CFLAGS_$(target-stem).o) PALING AKHIR di
+          # scripts/Makefile.lib, sehingga -fno-lto menang atas -flto=thin
+          # global HANYA untuk mm/memblock.o (variabel make command-line
+          # otomatis menurun ke sub-make). Hasil: satu-satunya TU non-LTO;
+          # memblock_free/memblock_reserve tetap kanonis untuk kptools
+          # FolkPatch, ThinLTO global tetap meng-GC dead code ECT. Global
+          # untuk semua varian (tak berpengaruh fungsional ke varian lain;
+          # target config mengabaikannya).
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
