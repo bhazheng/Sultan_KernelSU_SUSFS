@@ -96,60 +96,44 @@ jobs:
         run: |
           sudo apt-get update
           # ccache: cache kompilasi (dipasang di sini, dipakai langkah Build).
-          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd
 
-      - name: Download and extract Google Clang r584948b (Streamed)
+      - name: Download and extract Neutron Clang (06092026)
         shell: bash
         run: |
           set -euo pipefail
-          echo "Fetching Google Clang r584948b (Android 16 official toolchain, Clang 22.0.1)..."
+          echo "Fetching Neutron Clang 06092026 (Neutron-Toolchains/clang-build-catalogue)..."
           mkdir -p $GITHUB_WORKSPACE/clang
-          CLANG_VER="clang-r584948b"
-          # Kandidat +archive: branch main + commit pin (Update prebuilt).
-          # HTTP 400 dari +archive biasanya = arsip terlalu besar untuk
-          # dibuat on-the-fly, bukan URL salah — jadi ada fallback
-          # sparse git clone di bawah.
-          URLS=(
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${CLANG_VER}.tar.gz"
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/105aba85d97a53d364585ca755752dae054b49e8/${CLANG_VER}.tar.gz"
-          )
-          OK=0
-          for CLANG_URL in "${URLS[@]}"; do
-            for i in 1 2 3; do
-              echo "Trying: $CLANG_URL (attempt $i)"
-              HTTP_CODE="$(curl -sSL -o /tmp/clang.tgz -w "%{http_code}" "$CLANG_URL" || true)"
-              echo "HTTP code: $HTTP_CODE"
-              if [ "$HTTP_CODE" = "200" ] && [ -s /tmp/clang.tgz ]; then
-                if tar -tzf /tmp/clang.tgz >/dev/null 2>&1; then
-                  tar -xzf /tmp/clang.tgz -C $GITHUB_WORKSPACE/clang
-                  rm -f /tmp/clang.tgz
-                  echo "[+] Google Clang ${CLANG_VER} extracted successfully from $CLANG_URL"
-                  OK=1
-                  break 2
+          CLANG_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/06092026/neutron-clang-06092026.tar.zst"
+          for i in 1 2 3; do
+            echo "Attempt $i: $CLANG_URL"
+            HTTP_CODE="$(curl -sSL -o /tmp/clang.tar.zst -w "%{http_code}" "$CLANG_URL" || true)"
+            echo "HTTP code: $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ] && [ -s /tmp/clang.tar.zst ]; then
+              # Magic zstd: 28 b5 2f fd
+              if head -c 4 /tmp/clang.tar.zst | od -An -tx1 | grep -qi "28 b5 2f fd"; then
+                if tar -I zstd -tf /tmp/clang.tar.zst >/dev/null 2>&1; then
+                  tar -I zstd -xf /tmp/clang.tar.zst -C $GITHUB_WORKSPACE/clang
+                  rm -f /tmp/clang.tar.zst
+                  echo "[+] Neutron Clang extracted successfully"
+                  break
                 else
-                  echo "Downloaded file is not a valid tarball (first bytes):" >&2
-                  head -c 300 /tmp/clang.tgz >&2 || true
+                  echo "Arsip zst rusak, retry..." >&2
                 fi
               else
-                echo "retry $i failed for: $CLANG_URL (http=$HTTP_CODE)" >&2
+                echo "File bukan zstd valid (awal):" >&2
+                head -c 200 /tmp/clang.tar.zst >&2 || true
               fi
-              sleep 5
-            done
-          done
-          if [ "$OK" -ne 1 ]; then
-            echo "[*] +archive gagal (kemungkinan limit ukuran / HTTP 400). Fallback ke sparse git clone..."
-            rm -rf /tmp/clang-src
-            git clone --depth 1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 /tmp/clang-src
-            git -C /tmp/clang-src sparse-checkout set "$CLANG_VER"
-            if [ ! -d "/tmp/clang-src/$CLANG_VER" ]; then
-              echo "::error::Direktori $CLANG_VER tidak ditemukan setelah sparse checkout. Isi /tmp/clang-src:"
-              ls /tmp/clang-src >&2
+            else
+              echo "retry $i failed (http=$HTTP_CODE)" >&2
+            fi
+            rm -f /tmp/clang.tar.zst
+            sleep 5
+            if [ "$i" -eq 3 ]; then
+              echo "::error::Failed to download Neutron Clang after 3 attempts"
               exit 1
             fi
-            cp -a "/tmp/clang-src/${CLANG_VER}/." "$GITHUB_WORKSPACE/clang/"
-            rm -rf /tmp/clang-src
-            echo "[+] Google Clang ${CLANG_VER} diambil via sparse git clone"
-          fi
+          done
           chmod +x $GITHUB_WORKSPACE/clang/bin/* 2>/dev/null || true
           $GITHUB_WORKSPACE/clang/bin/clang --version
           $GITHUB_WORKSPACE/clang/bin/ld.lld --version
@@ -160,7 +144,7 @@ jobs:
           # Cache compiler: key per codename+varian+toolchain agar
           # tidak tercampur; restore-keys sebagai fallback prefix codename.
           path: ~/.cache/ccache
-          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-clang-v1
+          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-neutron-v1
           restore-keys: |
             ccache-${{ inputs.codename }}-
 
@@ -1012,7 +996,7 @@ jobs:
           ### 🚀 Build Summary: ${{ inputs.codename }} (${{ matrix.variant }}) [Clang]
           | Komponen | Status / Nilai |
           |---|---|
-          | **Compiler** | `Google Clang r584948b (Android 16 official, Clang 22.0.1)` |
+          | **Compiler** | `Neutron Clang 06092026` |
           | **Variant** | `${{ matrix.variant }}` |
           | **Artifact Name** | `${{ env.ZIP_NAME }}` |
           | **SHA-256** | \`${{ env.ZIP_SHA }}\` |
