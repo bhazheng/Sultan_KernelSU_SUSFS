@@ -81,6 +81,9 @@ jobs:
               ;;
           esac
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Free Disk Space on Runner
         shell: bash
         run: |
@@ -288,25 +291,19 @@ jobs:
             mv -f "$f" "rej-pre-overlay/$rel"
           done < <(find . -type f -name "*.rej" -print0)
 
-          # Overlay milik kita — fetch latest dari repo publik: tiap update overlay
-          # cukup upload + re-run, tanpa edit workflow. SHA dicatat di log sebagai
-          # jejak audit; apply tetap ketat (fail-closed).
+          # Overlay fixup susfs-next (v1.2.0): prioritaskan berkas lokal dari repo,
+          # fallback unduh dari remote jika tidak ditemukan di workspace.
           OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
           OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
-          curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
-          echo "--- overlay terunduh (latest, tanpa pin): ---"
+          if [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" ]; then
+            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
+            cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" "$OVERLAY_FILE"
+          else
+            echo "[+] Mengunduh next-susfs-fixup.patch dari remote..."
+            curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
+          fi
+          echo "--- overlay yang digunakan: ---"
           sha256sum "$OVERLAY_FILE"
-          # DEBUG SEMENTARA (paradoks umount): hunk byte-benar tapi FAILED @79
-          # deterministik di dua run. Tangkap penjelasan patch sendiri +
-          # dump whitespace-visible file aktual. HAPUS blok ini setelah hijau.
-          echo "--- patch version: $(patch --version | head -1) ---"
-          UMOUNT_HUNK="$GITHUB_WORKSPACE/umount-hunk.patch"
-          UMOUNT_START=$(grep -n "^--- a/kernel/feature/kernel_umount\.c" "$OVERLAY_FILE" | cut -d: -f1 || true)
-          sed -n "${UMOUNT_START:-1},999999p" "$OVERLAY_FILE" | awk '/^(---|\+\+\+|@@|[ +-\\])/{print; next}{exit}' > "$UMOUNT_HUNK" || true
-          echo "--- dry-run verbose hunk umount: ---"
-          patch -d "$KSUN_DIR" -p1 --verbose --dry-run < "$UMOUNT_HUNK" || true
-          echo "--- file aktual kernel_umount.c baris 70..120 (cat -A: tab=^I, akhir=$): ---"
-          sed -n '70,120p' "$KSUN_DIR/kernel/feature/kernel_umount.c" | cat -A || true
           patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
             echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
             exit 1
@@ -728,6 +725,27 @@ jobs:
           stat -c "size=%s bytes" "$IMAGE" || true
           file "$IMAGE" || true
           head -c 64 "$IMAGE" | od -A x -t x1z || true
+
+          # Sultan kernel dikompilasi dengan CONFIG_EFI nonaktif, sehingga header Image
+          # diawali NOP (0x1f 0x20 0x03 0xd5) pada offset 0 dan instruksi branch (B) di offset 4.
+          # kptools (KernelPatch) mengasumsikan kernel modern arm64 selalu memiliki magic "MZ"
+          # (ccmp x18, #0, #0xd, pl -> 0x4d 0x5a 0x40 0xfa) di offset 0 untuk mencari branch di offset 4.
+          # Tanpa "MZ", kptools salah membaca offset 0 sebagai branch dan gagal (d503201f).
+          # Oleh karena itu, kita sesuaikan 4 byte pertama menjadi opcode ARM64 EFI MZ standar.
+          python3 - << 'EOF' "$IMAGE"
+          import sys
+          img_path = sys.argv[1]
+          with open(img_path, "r+b") as f:
+              hdr = f.read(8)
+              if len(hdr) >= 8 and hdr[0:4] == b'\x1f\x20\x03\xd5' and (hdr[7] & 0xfc) == 0x14:
+                  print("[+] Terdeteksi Image ARM64 non-EFI (NOP di offset 0, branch di offset 4).")
+                  print("[+] Menyesuaikan 4 byte pertama dengan opcode ARM64 EFI MZ (ccmp x18, #0, #0xd, pl)...")
+                  f.seek(0)
+                  f.write(b'\x4d\x5a\x40\xfa')
+                  f.flush()
+                  print("[+] Header berhasil disesuaikan untuk kptools.")
+          EOF
+
           echo "[+] Patching $IMAGE dengan KernelPatch..."
           "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -o "$IMAGE.patched"
           if [ ! -s "$IMAGE.patched" ]; then
@@ -859,6 +877,7 @@ jobs:
             ${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload Manager APK Artifact
+        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'APatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: Manager-APK-${{ inputs.codename }}-${{ matrix.variant }}-gcc
