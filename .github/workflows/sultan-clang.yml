@@ -180,16 +180,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "[+] Cloning dependencies in parallel..."
-          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" &
+          echo "[+] Cloning dependencies in parallel (shallow + partial)..."
+          # Kernel tidak butuh histori git: versi di-anchor manual
+          # (LOCALVERSION_AUTO=0 + setlocalversion dinetralkan), jadi full
+          # clone multi-GB diganti shallow + partial (--depth=1,
+          # --filter=blob:none) — biasanya memangkas 3 menit++ menjadi
+          # <1 menit. Fallback ke shallow biasa bila server menolak
+          # partial clone.
+          clone_kernel() {
+            local n=0
+            until [ "$n" -ge 2 ]; do
+              if git -c protocol.version=2 clone --depth=1 --single-branch --no-tags --filter=blob:none https://github.com/bhazheng/android_kernel_google_tensynos android_kernel_google_tensynos; then
+                return 0
+              fi
+              n=$((n+1))
+              echo "retry $n/2 partial clone kernel gagal, membersihkan..." >&2
+              rm -rf android_kernel_google_tensynos
+              sleep 5
+            done
+            echo "[*] Partial clone ditolak server — fallback ke shallow penuh." >&2
+            git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/bhazheng/android_kernel_google_tensynos android_kernel_google_tensynos
+          }
+          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" AnyKernel3 &
 
-          # Repositori kernel wajib di-clone penuh (tanpa --depth=1)
-          git clone https://github.com/bhazheng/android_kernel_google_tensynos &
+          clone_kernel &
 
           # FS-side dari branch Sultan (50_add rebased untuk tree tensynos;
           # hunk sys.c/readdir/task_mmu mengikuti konteks Sultan). Sisi-KSU tetap
           # glue 10_enable (byte-identik di kedua branch susfs — verifikasi SHA).
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" &
+          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" susfs4ksu &
 
           # Tunggu semua clone paralel selesai sebelum langkah berikut.
           wait
