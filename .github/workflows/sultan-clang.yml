@@ -104,19 +104,52 @@ jobs:
           set -euo pipefail
           echo "Fetching Google Clang r584948b (Android 16 official toolchain, Clang 22.0.1)..."
           mkdir -p $GITHUB_WORKSPACE/clang
-          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r584948b.tar.gz"
-          for i in 1 2 3 4 5; do
-            if curl -fsSL "$CLANG_URL" | tar -xz -C $GITHUB_WORKSPACE/clang; then
-              echo "[+] Google Clang r584948b extracted successfully"
-              break
-            fi
-            echo "retry $i/5 failed for: $CLANG_URL" >&2
-            sleep 5
-            if [ "$i" -eq 5 ]; then
-              echo "::error::Failed to download Google Clang r584948b after 5 attempts"
+          CLANG_VER="clang-r584948b"
+          # Kandidat +archive: branch main + commit pin (Update prebuilt).
+          # HTTP 400 dari +archive biasanya = arsip terlalu besar untuk
+          # dibuat on-the-fly, bukan URL salah — jadi ada fallback
+          # sparse git clone di bawah.
+          URLS=(
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${CLANG_VER}.tar.gz"
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/105aba85d97a53d364585ca755752dae054b49e8/${CLANG_VER}.tar.gz"
+          )
+          OK=0
+          for CLANG_URL in "${URLS[@]}"; do
+            for i in 1 2 3; do
+              echo "Trying: $CLANG_URL (attempt $i)"
+              HTTP_CODE="$(curl -sSL -o /tmp/clang.tgz -w "%{http_code}" "$CLANG_URL" || true)"
+              echo "HTTP code: $HTTP_CODE"
+              if [ "$HTTP_CODE" = "200" ] && [ -s /tmp/clang.tgz ]; then
+                if tar -tzf /tmp/clang.tgz >/dev/null 2>&1; then
+                  tar -xzf /tmp/clang.tgz -C $GITHUB_WORKSPACE/clang
+                  rm -f /tmp/clang.tgz
+                  echo "[+] Google Clang ${CLANG_VER} extracted successfully from $CLANG_URL"
+                  OK=1
+                  break 2
+                else
+                  echo "Downloaded file is not a valid tarball (first bytes):" >&2
+                  head -c 300 /tmp/clang.tgz >&2 || true
+                fi
+              else
+                echo "retry $i failed for: $CLANG_URL (http=$HTTP_CODE)" >&2
+              fi
+              sleep 5
+            done
+          done
+          if [ "$OK" -ne 1 ]; then
+            echo "[*] +archive gagal (kemungkinan limit ukuran / HTTP 400). Fallback ke sparse git clone..."
+            rm -rf /tmp/clang-src
+            git clone --depth 1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 /tmp/clang-src
+            git -C /tmp/clang-src sparse-checkout set "$CLANG_VER"
+            if [ ! -d "/tmp/clang-src/$CLANG_VER" ]; then
+              echo "::error::Direktori $CLANG_VER tidak ditemukan setelah sparse checkout. Isi /tmp/clang-src:"
+              ls /tmp/clang-src >&2
               exit 1
             fi
-          done
+            cp -a "/tmp/clang-src/${CLANG_VER}/." "$GITHUB_WORKSPACE/clang/"
+            rm -rf /tmp/clang-src
+            echo "[+] Google Clang ${CLANG_VER} diambil via sparse git clone"
+          fi
           chmod +x $GITHUB_WORKSPACE/clang/bin/* 2>/dev/null || true
           $GITHUB_WORKSPACE/clang/bin/clang --version
           $GITHUB_WORKSPACE/clang/bin/ld.lld --version
