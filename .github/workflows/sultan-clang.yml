@@ -754,15 +754,15 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/KernelPatch-src"
           if git clone --depth 1 https://github.com/LyraVoid/KernelPatch.git "$GITHUB_WORKSPACE/KernelPatch-src"; then
             PATCH_APPLIED=0
-            if [ -f "$GITHUB_WORKSPACE/patches/kptools-system-map.patch" ]; then
-              if patch -d "$GITHUB_WORKSPACE/KernelPatch-src" -p1 < "$GITHUB_WORKSPACE/patches/kptools-system-map.patch"; then
+            if [ -f "$GITHUB_WORKSPACE/kptools-system-map.patch" ]; then
+              if patch -d "$GITHUB_WORKSPACE/KernelPatch-src" -p1 < "$GITHUB_WORKSPACE/kptools-system-map.patch"; then
                 echo "[+] kptools-system-map.patch berhasil diterapkan ke source kptools!"
                 PATCH_APPLIED=1
               fi
             fi
             if [ "$PATCH_APPLIED" -eq 0 ]; then
               echo "[+] Menerapkan patch System.map ke kallsym.c via skrip python..."
-              python3 "$GITHUB_WORKSPACE/scripts/patch_kptools.py" "$GITHUB_WORKSPACE/KernelPatch-src/tools/kallsym.c" || true
+              python3 "$GITHUB_WORKSPACE/patch_kptools.py" "$GITHUB_WORKSPACE/KernelPatch-src/tools/kallsym.c" || true
             fi
             if make -C "$GITHUB_WORKSPACE/KernelPatch-src/tools" -j"$(nproc)"; then
               cp -f "$GITHUB_WORKSPACE/KernelPatch-src/tools/kptools" "$TOOLS_DIR/kptools"
@@ -807,10 +807,10 @@ jobs:
               break
             fi
           done
-          if [ -n "$MAPS_FOUND" ] && [ -f "$GITHUB_WORKSPACE/scripts/extract_kallsyms.py" ]; then
+          if [ -n "$MAPS_FOUND" ] && [ -f "$GITHUB_WORKSPACE/extract_kallsyms.py" ]; then
             export SYSTEM_MAP="$MAPS_FOUND"
             echo "[+] System.map terdeteksi di: $SYSTEM_MAP"
-            python3 "$GITHUB_WORKSPACE/scripts/extract_kallsyms.py" "$IMAGE" "$SYSTEM_MAP" > /tmp/kallsyms_env.sh
+            python3 "$GITHUB_WORKSPACE/extract_kallsyms.py" "$IMAGE" "$SYSTEM_MAP" > /tmp/kallsyms_env.sh
             if [ -s /tmp/kallsyms_env.sh ]; then
               echo "[+] Mengimpor offset kallsyms dari System.map ke environment:"
               cat /tmp/kallsyms_env.sh
