@@ -603,14 +603,14 @@ jobs:
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
       - name: Apply FolkPatch ECT compat stub
-        if: ${{ matrix.variant == 'FolkPatch' }}
         shell: bash
         run: |
           set -euo pipefail
           cd "$CONFIG"
 
           # Shim kompatibilitas untuk build non-LTO (workflow Clang memakai
-          # CONFIG_LTO_NONE; FolkPatch butuh simbol kanonis untuk kptools).
+          # CONFIG_LTO_NONE untuk SEMUA varian; FolkPatch butuh simbol
+          # kanonis untuk kptools). Berlaku untuk semua varian Clang.
           # BUKAN kode upstream.
           #
           # Skew upstream: import 56cf922a ("Import 'google-modules/soc/gs'
@@ -651,7 +651,7 @@ jobs:
           head -n 1 "$STUB_FILE" | grep -q 'SPDX'
           grep -q 'exynos_acme_ect_freq' "$STUB_FILE"
           grep -q 'gs_tmu_ect_compat_stub.o' "$STUB_DIR/Kbuild"
-          echo "[+] ECT compat stub terpasang untuk FolkPatch."
+          echo "[+] ECT compat stub terpasang."
 
       - name: Build the Kernel
         shell: bash
