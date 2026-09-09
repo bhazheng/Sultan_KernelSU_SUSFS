@@ -337,34 +337,37 @@ jobs:
           patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" \
             || echo "::warning::10_enable_susfs gagal diterapkan, reject akan dikumpulkan untuk dianalisis."
 
-          # [SEMENTARA DINONAKTIFKAN] Arsipkan .rej pra-overlay & overlay fixup (next-susfs-fixup.patch)
-          # Dinonaktifkan sementara agar seluruh reject murni dari 10_enable_susfs dan 50_add_susfs
-          # tetap berada di pohon sumber aslinya di samping file target dan dapat diinspeksi.
-          # mkdir -p rej-pre-overlay
-          # while IFS= read -r -d '' f; do
-          #   rel="${f#./}"
-          #   mkdir -p "rej-pre-overlay/$(dirname "$rel")"
-          #   mv -f "$f" "rej-pre-overlay/$rel"
-          # done < <(find . -type f -name "*.rej" -print0)
+          # Arsipkan .rej pra-overlay & overlay fixup (next-susfs-fixup.patch)
+          # Reject murni dari 10_enable_susfs dipindahkan ke rej-pre-overlay/
+          # agar next-susfs-fixup.patch menutup semua reject tersebut.
+          mkdir -p rej-pre-overlay
+          while IFS= read -r -d '' f; do
+            rel="${f#./}"
+            mkdir -p "rej-pre-overlay/$(dirname "$rel")"
+            mv -f "$f" "rej-pre-overlay/$rel"
+          done < <(find . -type f -name "*.rej" -print0)
 
-          # OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
-          # OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
-          # if [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" ]; then
-          #   echo "[+] Menggunakan next-susfs-fixup-v1.2.patch lokal dari repository..."
-          #   cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" "$OVERLAY_FILE"
-          # elif [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" ]; then
-          #   echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
-          #   cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" "$OVERLAY_FILE"
-          # else
-          #   echo "[+] Mengunduh next-susfs-fixup.patch dari remote..."
-          #   curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
-          # fi
-          # echo "--- overlay yang digunakan: ---"
-          # sha256sum "$OVERLAY_FILE"
-          # patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
-          #   echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
-          #   exit 1
-          # }
+          OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
+          OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
+          if [ -f "$GITHUB_WORKSPACE/next-susfs-fixup.patch" ]; then
+            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
+            cp "$GITHUB_WORKSPACE/next-susfs-fixup.patch" "$OVERLAY_FILE"
+          elif [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" ]; then
+            echo "[+] Menggunakan next-susfs-fixup-v1.2.patch lokal dari repository..."
+            cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" "$OVERLAY_FILE"
+          elif [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" ]; then
+            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
+            cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" "$OVERLAY_FILE"
+          else
+            echo "[+] Mengunduh next-susfs-fixup.patch dari remote..."
+            curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
+          fi
+          echo "--- overlay yang digunakan: ---"
+          sha256sum "$OVERLAY_FILE"
+          patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
+            echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
+            exit 1
+          }
 
           # Compat KernelSU-Next v3.3.0+: jika terdapat referensi ksu_late_loaded di dispatch.c,
           # netralkan ke false untuk built-in build.
@@ -375,19 +378,8 @@ jobs:
           fi
           grep -rn "ksu_late_loaded" "$KSUN_DIR/kernel/" || echo "[+] OK: tidak ada referensi ksu_late_loaded tersisa."
 
-          # Sys-uname hook (remote, shiba-adapted): wiring susfs_spoof_uname()
-          # ke syscall newuname (SPOOF_UNAME default y). Konteks disesuaikan
-          # untuk sys.c pasca-50_add shiba (tanpa blok is_gms stock).
-          SYSUNAME_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/sys.c_fix.patch"
-          SYSUNAME_FILE="$GITHUB_WORKSPACE/sys.c_fix.patch"
-          curl -fsSL --retry 3 "$SYSUNAME_URL" -o "$SYSUNAME_FILE"
-          echo "--- sys.c_fix terunduh (latest, tanpa pin): ---"
-          sha256sum "$SYSUNAME_FILE"
-          patch -p1 < "$SYSUNAME_FILE" \
-            || echo "::warning::sys.c_fix gagal diterapkan, lanjut."
-
           # Cetak daftar dan isi semua file .rej yang ditemukan ke log console
-          echo "=== Daftar file .rej yang ditemukan ==="
+          echo "=== Daftar file .rej yang ditemukan pasca-overlay ==="
           find . -type f -name "*.rej" -print || true
           for rf in $(find . -type f -name "*.rej"); do
             echo "::warning file=$rf::Reject ditemukan pada $rf"
@@ -409,11 +401,7 @@ jobs:
             "$KSUN_DIR/kernel/feature/kernel_umount.c.rej" \
           ; do
             if [ -f "$r" ]; then
-              echo "::error::Reject kritis ditemukan: $r"
-              REJ_CRIT=1
-            fi
-            if [ -f "rej-pre-overlay/$r" ]; then
-              echo "::error::Reject kritis ditemukan: rej-pre-overlay/$r"
+              echo "::error::Reject kritis ditemukan pasca-overlay: $r"
               REJ_CRIT=1
             fi
           done
@@ -422,7 +410,7 @@ jobs:
             REJ_CRIT=1
           fi
           if [ "$REJ_CRIT" -eq 1 ]; then
-            echo "::error::Patch SUSFS/KSU memiliki reject — build dihentikan untuk inspeksi .rej terbaru. Cek log di atas dan unduh artifact rej-*.zip."
+            echo "::error::Patch SUSFS/KSU memiliki reject pasca-overlay — build dihentikan. Cek log di atas dan unduh artifact rej-*.zip."
             exit 1
           fi
           echo "[+] Konsistensi patch SUSFS/KSU OK."
