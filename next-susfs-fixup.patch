@@ -10,7 +10,7 @@
 # konteks 'kernelsu-objs += extras.o' (objek upstream-baru, dipertahankan).
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
-@@ -4,25 +4,13 @@ kernelsu-objs += feature/kernel_umount.o
+@@ -4,25 +4,14 @@ kernelsu-objs += feature/kernel_umount.o
  kernelsu-objs += feature/sulog.o
  kernelsu-objs += feature/sucompat.o
  
@@ -32,7 +32,7 @@
  kernelsu-objs += infra/event_queue.o
  kernelsu-objs += infra/seccomp_cache.o
  kernelsu-objs += infra/su_mount_ns.o
--kernelsu-objs += infra/symbol_resolver.o
+ kernelsu-objs += infra/symbol_resolver.o
  
  ifneq ($(CONFIG_KSU_DISABLE_MANAGER),y)
  kernelsu-objs += manager/apk_sign.o
@@ -49,7 +49,7 @@
  
  #include "policy/allowlist.h"
  #include "policy/app_profile.h"
-@@ -18,19 +18,11 @@
+@@ -18,19 +18,12 @@
  #include "ksu.h"
  #include "infra/file_wrapper.h"
  #include "selinux/selinux.h"
@@ -57,7 +57,7 @@
  #include "feature/adb_root.h"
  #include "feature/selinux_hide.h"
  #include "feature/sulog.h"
--#include "infra/symbol_resolver.h"
+ #include "infra/symbol_resolver.h"
 +#include "hook/setuid_hook.h"
 +#include "feature/sucompat.h"
  
@@ -107,11 +107,11 @@
  	if (allow_shell) {
  		pr_alert("shell is allowed at init!");
  	}
-@@ -129,76 +129,40 @@ int __init kernelsu_init(void)
+@@ -129,76 +129,41 @@ int __init kernelsu_init(void)
  		return -ENOSYS;
  	}
  
--	ksu_init_symbol_resolver();
+ 	ksu_init_symbol_resolver();
 -	ksu_syscall_hook_init();
 +#ifdef CONFIG_KSU_SUSFS
 +    susfs_init();
