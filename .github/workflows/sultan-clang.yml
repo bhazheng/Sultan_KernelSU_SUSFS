@@ -571,6 +571,14 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
+          # Perbaikan duplicate symbol: init_uts_ns & linux_banner pada ld.lld (Clang ThinLTO).
+          # Standar Linux 6.1 upstream: vmlinux.o hanya berisi simbol weak dari init/version.c
+          # tanpa menyertakan init/version-timestamp.o, karena init/version-timestamp.o
+          # di-link di scripts/link-vmlinux.sh.
+          sed -i '/version-timestamp\.c/d' init/version.c
+          sed -i 's|--whole-archive vmlinux.a init/version-timestamp.o|--whole-archive vmlinux.a --no-whole-archive|' scripts/Makefile.vmlinux_o
+          sed -i 's|vmlinux.a init/version-timestamp.o|vmlinux.a|' scripts/Makefile.vmlinux_o
+
       - name: Build the Kernel
         shell: bash
         run: |

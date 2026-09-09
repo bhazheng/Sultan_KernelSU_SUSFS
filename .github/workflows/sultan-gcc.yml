@@ -530,6 +530,11 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
+          # Perbaikan duplikasi init_uts_ns & linux_banner sesuai standar Linux 6.1 upstream.
+          sed -i '/version-timestamp\.c/d' init/version.c
+          sed -i 's|--whole-archive vmlinux.a init/version-timestamp.o|--whole-archive vmlinux.a --no-whole-archive|' scripts/Makefile.vmlinux_o
+          sed -i 's|vmlinux.a init/version-timestamp.o|vmlinux.a|' scripts/Makefile.vmlinux_o
+
       - name: Build the Kernel
         shell: bash
         run: |
