@@ -7,21 +7,21 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
-      apatch_superkey:
-        description: "Superkey APatch (wajib hanya untuk varian APatch; kosongkan bila tidak build APatch)"
+      folkpatch_superkey:
+        description: "Superkey FolkPatch (wajib hanya untuk varian FolkPatch; kosongkan bila tidak build FolkPatch)"
         required: false
         default: ""
         type: string
       variants:
         description: "Varian yang di-build"
         required: false
-        default: '["KernelSU-Next", "NoRoot", "APatch"]'
+        default: '["KernelSU-Next", "NoRoot", "FolkPatch"]'
         type: choice
         options:
-          - '["KernelSU-Next", "NoRoot", "APatch"]'
+          - '["KernelSU-Next", "NoRoot", "FolkPatch"]'
           - '["KernelSU-Next"]'
           - '["NoRoot"]'
-          - '["APatch"]'
+          - '["FolkPatch"]'
       toolchain:
         description: "Toolchain yang dipakai"
         required: false
@@ -41,7 +41,7 @@ jobs:
       codename: "gs201"
       android_version: "android14"
       kernel_version: "6.1"
-      apatch_superkey: ${{ inputs.apatch_superkey }}
+      folkpatch_superkey: ${{ inputs.folkpatch_superkey }}
       variants: ${{ inputs.variants }}
 
   build-kernel-gs201-clang:
@@ -52,7 +52,7 @@ jobs:
       codename: "gs201"
       android_version: "android14"
       kernel_version: "6.1"
-      apatch_superkey: ${{ inputs.apatch_superkey }}
+      folkpatch_superkey: ${{ inputs.folkpatch_superkey }}
       variants: ${{ inputs.variants }}
 
   trigger-release:
@@ -64,7 +64,7 @@ jobs:
       REPO_OWNER: TheWildJames
       REPO_NAME: Sultan_KernelSU_SUSFS
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_NAME: "Sultan Kernels (Next / NoRoot / APatch) + SUSFS"
+      RELEASE_NAME: "Sultan Kernels (Next / NoRoot / FolkPatch) + SUSFS"
       RELEASE_NOTES: |
         This release contains Sultan gs201 kernels in 3 variants + NoMount metamodule.
         
@@ -73,21 +73,22 @@ jobs:
         
         Variants:
         -> KernelSU-Next + SUSFS (inline hook)
-        -> NoRoot (clean Sultan, no root — also usable as APatch base)
-        -> APatch (pre-rooted via KernelPatch; needs APatch Manager + the superkey used at build)
+        -> NoRoot (clean Sultan, no root — also usable as FolkPatch base)
+        -> FolkPatch (pre-rooted via KernelPatch/FolkPatch; needs FolkPatch Manager + the superkey used at build)
         
         Module: 
         -> https://github.com/sidex15/ksu_module_susfs
-        -> NoMount metamodule (attached; for KSU variants & APatch)
+        -> NoMount metamodule (attached; for KSU variants & FolkPatch)
         
-        Managers:
+        Managers & Tooling:
         -> https://github.com/pershoot/KernelSU-Next (Next)
-        -> https://github.com/bmax121/APatch (APatch)
+        -> https://github.com/LyraVoid/FolkPatch (FolkPatch Manager)
+        -> https://github.com/LyraVoid/KernelPatch (FolkPatch KernelPatch Engine)
         
         Features:
-        [+] KernelSU-Next / APatch
+        [+] KernelSU-Next / FolkPatch
         [+] SUSFS (Next)
-        [+] NoMount (Next & APatch)
+        [+] NoMount (Next & FolkPatch)
         [+] BBRV3
 
     steps:
