@@ -21,27 +21,23 @@ on:
         required: true
         default: "6.1"
         type: string
-      apatch_superkey:
-        description: "Superkey APatch/KernelPatch (opsional jika secret APATCH_SUPERKEY sudah diisi di repo settings)"
+      folkpatch_superkey:
+        description: "Superkey FolkPatch/KernelPatch (opsional jika secret FOLKPATCH_SUPERKEY sudah diisi di repo settings)"
         required: false
         default: ""
         type: string
       variants:
         description: "Varian yang di-build"
         required: false
-        default: '["KernelSU-Next", "NoRoot", "APatch"]'
+        default: '["KernelSU-Next", "NoRoot", "FolkPatch"]'
         type: choice
         options:
-          - '["KernelSU-Next", "NoRoot", "APatch"]'
+          - '["KernelSU-Next", "NoRoot", "FolkPatch"]'
           - '["KernelSU-Next"]'
           - '["NoRoot"]'
-          - '["APatch"]'
+          - '["FolkPatch"]'
   workflow_call:
     inputs:
-      repo:
-        required: false
-        type: string
-        default: ""
       codename:
         required: true
         type: string
@@ -51,7 +47,7 @@ on:
       kernel_version:
         required: true
         type: string
-      apatch_superkey:
+      folkpatch_superkey:
         required: false
         default: ""
         type: string
@@ -59,7 +55,7 @@ on:
         description: "Varian yang di-build (JSON array)"
         required: false
         type: string
-        default: '["KernelSU-Next", "NoRoot", "APatch"]'
+        default: '["KernelSU-Next", "NoRoot", "FolkPatch"]'
 
 jobs:
   build-kernel-sultan-kernelsu-susfs:
@@ -73,7 +69,7 @@ jobs:
       - name: Validate Inputs
         shell: bash
         run: |
-          # Validasi awal ala Ante0: tree kernel bhazheng hanya untuk gs201.
+          # Validasi awal: tree kernel bhazheng hanya untuk gs201.
           # Gagal cepat sebelum runner mengunduh toolchain bila codename salah.
           case "${{ inputs.codename }}" in
             gs201)
@@ -84,6 +80,9 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Free Disk Space on Runner
         shell: bash
@@ -96,7 +95,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          # ccache: cache kompilasi ala Ante0 (dipasang di sini, dipakai langkah Build).
+          # ccache: cache kompilasi (dipasang di sini, dipakai langkah Build).
           sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
 
       - name: Download and extract ZyC Clang (Streamed)
@@ -114,7 +113,7 @@ jobs:
       - name: Restore ccache
         uses: actions/cache@v4
         with:
-          # Cache compiler ala Ante0: key per codename+varian+toolchain agar
+          # Cache compiler: key per codename+varian+toolchain agar
           # tidak tercampur; restore-keys sebagai fallback prefix codename.
           path: ~/.cache/ccache
           key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-clang-v1
@@ -143,19 +142,19 @@ jobs:
           # Repositori kernel wajib di-clone penuh (tanpa --depth=1)
           git clone https://github.com/bhazheng/android_kernel_google_tensynos &
 
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-android14-6.1" &
+          # FS-side dari branch Sultan (50_add rebased untuk tree tensynos;
+          # hunk sys.c/readdir/task_mmu mengikuti konteks Sultan). Sisi-KSU tetap
+          # glue 10_enable (byte-identik di kedua branch susfs — verifikasi SHA).
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" &
 
-          # Patch glue Ante0 untuk Next resmi (fix v2.2.0 + unicode + fixer) —
-          # hanya dipakai varian Next; clone di sini agar langkah ini tetap agnostik varian.
-          git clone --depth=1 https://github.com/Ante0/kernel_patches.git anteo_kernel_patches &
-          git clone --depth=1 https://github.com/Ante0/fix_patches.git sultan_patches &
+          # Tunggu semua clone paralel selesai sebelum langkah berikut.
           wait
 
       - name: Record Upstream SHAs
         shell: bash
         run: |
           set -euo pipefail
-          # Manifest SHA ala Ante0 (nightly.json): catat tip tiap sumber upstream
+          # Manifest SHA: catat tip tiap sumber upstream
           # agar build dapat direproduksi/diaudit. Warn-only bila sumber gagal dihubungi.
           python3 - << 'EOF'
           import json, os, subprocess
@@ -186,10 +185,8 @@ jobs:
           shas = {
               "kernel_tree_bhazheng": local_head(config),
               "KernelSU-Next_dev": ls_remote("https://github.com/KernelSU-Next/KernelSU-Next.git", "refs/heads/dev"),
-              "susfs4ksu_gki-android14-6.1": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/gki-android14-6.1"),
+              "susfs4ksu_sultan-shiba-susfs-minimal": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/sultan-shiba-susfs-minimal"),
               "nomount_dev": ls_remote("https://github.com/maxsteeel/nomount.git", "refs/heads/dev"),
-              "Ante0_kernel_patches_HEAD": ls_remote("https://github.com/Ante0/kernel_patches.git", "HEAD"),
-              "Ante0_fix_patches_HEAD": ls_remote("https://github.com/Ante0/fix_patches.git", "HEAD"),
           }
           with open("upstream-shas.json", "w") as f:
               json.dump(shas, f, indent=2)
@@ -234,7 +231,7 @@ jobs:
           }
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Adding KernelSU-Next resmi (branch dev, ala Ante0/SULTAN17)..."
+            echo "[+] Adding KernelSU-Next resmi (branch dev)..."
             curl -LSs --retry 5 --retry-delay 5 --retry-all-errors \
               "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
               | bash -s dev
@@ -246,6 +243,12 @@ jobs:
           fi
           if ! grep -q 'kernelsu' drivers/Makefile; then
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          fi
+
+          # Matikan warning misleading-indentation di tree KernelSU untuk mencegah
+          # compiler memperlakukannya sebagai fatal error (-Werror)
+          if [ -f drivers/kernelsu/Makefile ]; then
+            echo "subdir-ccflags-y += -Wno-misleading-indentation" >> drivers/kernelsu/Makefile
           fi
 
           # Validasi
@@ -266,19 +269,16 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          # Resep KernelSU-Next ala Ante0/SULTAN17 (Next resmi `dev` + susfs upstream):
-          # urutan = unicode -> copy susfs -> 50_add (tree) -> 10_enable (KernelSU-Next)
-          # -> 8 fix v2.2.0 (KernelSU-Next) -> fixer.patch (tree).
-          # Semua patch opsional ala apply_patch_optional Ante0: gagal = warning
-          # eksplisit + lanjut (reject terlihat di log; bukan `|| true` yang diam).
-          # Target -d "KernelSU-Next" (bukan drivers/kernelsu) karena path patch
-          # berbentuk a/kernel/... (sama seperti perintah Ante0).
+          # Resep mandiri: Next resmi `dev` +
+          # susfs shiba (50_add + 10_enable) + overlay milik kita.
+          # urutan = copy susfs -> 50_add (tree) -> 10_enable (KernelSU-Next)
+          # -> overlay (gerbang keras) -> fixer sys-uname (tree).
+          # unicode_bypass Next dicakup langkah Optimization (post-50_add);
+          # bila 50_add butuh konteks pre-unicode, reject-nya masuk .rej dan
+          # dilipat ke overlay pada putaran berikut (loop konvergensi).
+          # Target -d "KernelSU-Next" karena path patch berbentuk a/kernel/....
           SUSFS_DIR="../susfs4ksu/kernel_patches"
-          ANTEO_DIR="../anteo_kernel_patches"
           KSUN_DIR="KernelSU-Next"
-
-          patch -p1 --forward < "$ANTEO_DIR/common/unicode_bypass_fix_6.1+.patch" \
-            || echo "::warning::unicode_bypass gagal diterapkan, lanjut."
 
           # SUSFS Common (libs)
           cp "$SUSFS_DIR/fs/"* ./fs/
@@ -288,15 +288,51 @@ jobs:
             || echo "::warning::50_add_susfs gagal diterapkan, lanjut."
 
           patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" \
-            || echo "::warning::10_enable_susfs gagal diterapkan, lanjut."
+            || echo "::warning::10_enable_susfs gagal diterapkan, lanjut (ditutup overlay)."
 
-          for f in fix_Kbuild "fix_init.c" "fix_kernel_umount.c" "fix_setuid_hook.c" "fix_sucompat.c" "fix_supercall.c" ksu_toolkit overwrite_hook_mode; do
-            patch -d "$KSUN_DIR" -p1 < "$ANTEO_DIR/next/susfs_fix_patches/v2.2.0/$f.patch" \
-              || echo "::warning::$f gagal diterapkan, lanjut."
-          done
+          # Arsipkan .rej pra-overlay ke rej-pre-overlay/: GNU patch tidak
+          # menghapus .rej basi saat invocation berikutnya sukses, sehingga
+          # tanpa ini bundle tercampur jejak 10_enable dan atribusi overlay
+          # tak terbaca. Pasca-arsip, .rej yang muncul di tree = milik overlay
+          # (atau tahap sesudahnya) saja; arsip ikut terkumpul otomatis.
+          mkdir -p rej-pre-overlay
+          while IFS= read -r -d '' f; do
+            rel="${f#./}"
+            mkdir -p "rej-pre-overlay/$(dirname "$rel")"
+            mv -f "$f" "rej-pre-overlay/$rel"
+          done < <(find . -type f -name "*.rej" -print0)
 
-          patch -p1 < "../sultan_patches/fixer.patch" \
-            || echo "::warning::fixer.patch gagal diterapkan, lanjut."
+          # Overlay fixup susfs-next (v1.2.0): prioritaskan berkas lokal dari repo,
+          # fallback unduh dari remote jika tidak ditemukan di workspace.
+          OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
+          OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
+          if [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" ]; then
+            echo "[+] Menggunakan next-susfs-fixup-v1.2.patch lokal dari repository..."
+            cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup-v1.2.patch" "$OVERLAY_FILE"
+          elif [ -f "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" ]; then
+            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari repository..."
+            cp "$GITHUB_WORKSPACE/patches/next-susfs-fixup/next-susfs-fixup.patch" "$OVERLAY_FILE"
+          else
+            echo "[+] Mengunduh next-susfs-fixup.patch dari remote..."
+            curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
+          fi
+          echo "--- overlay yang digunakan: ---"
+          sha256sum "$OVERLAY_FILE"
+          patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
+            echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
+            exit 1
+          }
+
+          # Sys-uname hook (remote, shiba-adapted): wiring susfs_spoof_uname()
+          # ke syscall newuname (SPOOF_UNAME default y). Konteks disesuaikan
+          # untuk sys.c pasca-50_add shiba (tanpa blok is_gms stock).
+          SYSUNAME_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/sys.c_fix.patch"
+          SYSUNAME_FILE="$GITHUB_WORKSPACE/sys.c_fix.patch"
+          curl -fsSL --retry 3 "$SYSUNAME_URL" -o "$SYSUNAME_FILE"
+          echo "--- sys.c_fix terunduh (latest, tanpa pin): ---"
+          sha256sum "$SYSUNAME_FILE"
+          patch -p1 < "$SYSUNAME_FILE" \
+            || echo "::warning::sys.c_fix gagal diterapkan, lanjut."
 
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -320,10 +356,9 @@ jobs:
           for p in "${PATCHES[@]}"; do
             curl -fsSL --retry 3 "$REPO/$p" | patch -p1 --forward || true
           done
-          sed -i 's/EXPORT_SYMBOL_GPL/EXPORT_SYMBOL/g' kernel/module.c kernel/module/main.c 2>/dev/null || true
 
       - name: Integrate NoMount
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'APatch' }}
+        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -335,7 +370,7 @@ jobs:
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
 
       - name: Build and Package NoMount Metamodule
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'APatch' }}
+        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -442,17 +477,17 @@ jobs:
             echo "CONFIG_FUSE_BPF=y"
           } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
 
-          # NoMount kompatibel dengan APatch (customize.sh mendukung $APATCH=true;
+          # NoMount kompatibel dengan FolkPatch (customize.sh mendukung modding;
           # nomount.c nol dependensi KSU/SUSFS) — hanya NoRoot yang melewatinya.
-          if [ "${{ matrix.variant }}" == "KernelSU-Next" ] || [ "${{ matrix.variant }}" == "APatch" ]; then
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ] || [ "${{ matrix.variant }}" == "FolkPatch" ]; then
             {
               echo "CONFIG_NOMOUNT=y"
             } >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig"
           else
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_NOMOUNT dilewati."
           fi
-          # Simbol KSU/SUSFS ala Ante0/SULTAN17 — hanya untuk KernelSU-Next
-          # (NoRoot/APatch tidak membawa drivers/kernelsu maupun patch SUSFS):
+          # Simbol KSU/SUSFS — hanya untuk KernelSU-Next
+          # (NoRoot/FolkPatch tidak membawa drivers/kernelsu maupun patch SUSFS):
           # KSU + SUSFS aktif, SUS_SU dimatikan eksplisit, sisanya default upstream.
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             {
@@ -484,7 +519,7 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin" ]; then
             export PATH="$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin:$PATH"
           fi
-          # ccache ala Ante0: bungkus clang via wrapper + PATH precedence
+          # ccache: bungkus clang via wrapper + PATH precedence
           # (kbuild memanggil `clang` via PATH; wrapper men-shadow sebelum clang asli).
           # Wrapper script (bukan CC="ccache ..." di MAKE_ARGS) karena spasi dalam
           # string MAKE_ARGS tidak dikutip ulang saat ekspansi `make $MAKE_ARGS`.
@@ -512,9 +547,9 @@ jobs:
           # 2. Injeksi mutlak konfigurasi ke target config yang aktif
           # (tanpa KPROBES/HAVE_KPROBES/KRETPROBES/KPROBE_EVENTS — lihat NOTE di atas;
           # HAVE_KPROBES adalah simbol select-only milik arch, bukan untuk diset manual.
-          # Blok KSU ala Ante0/SULTAN17: paksa KSU + SUSFS aktif, SUS_SU mati
+          # Blok KSU: paksa KSU + SUSFS aktif, SUS_SU mati
           # (koheren dengan blok defconfig minimal di atas; sisanya default upstream).
-          # Blok KSU hanya untuk varian root — NoRoot/APatch tidak ada drivers/kernelsu di tree.)
+          # Blok KSU hanya untuk varian root — NoRoot/FolkPatch tidak ada drivers/kernelsu di tree.)
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             ./scripts/config --file "$CONFIG_FILE" \
               -e CONFIG_KSU \
@@ -556,7 +591,7 @@ jobs:
           else
             echo "::notice::CONFIG_KPROBES nonaktif — ekspektasi Sultan (INTEGRATE_MODULES=y => MODULES=n => KPROBES=n)."
           fi
-          # Varian non-root (NoRoot/APatch) tidak membawa KSU — pemeriksaan ini dilewati
+          # Varian non-root (NoRoot/FolkPatch) tidak membawa KSU — pemeriksaan ini dilewati
           # (ketidakhadiran KSU justru ekspektasi yang benar).
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
@@ -587,31 +622,33 @@ jobs:
             exit 1
           }
 
-          # Statistik ccache untuk log (diagnostik ala Ante0; tak menggagalkan build).
+          # Statistik ccache untuk log (tak menggagalkan build).
           ccache -s || true
 
-      - name: Embed KernelPatch for APatch
-        if: ${{ matrix.variant == 'APatch' }}
+      - name: Embed KernelPatch for FolkPatch
+        if: ${{ matrix.variant == 'FolkPatch' }}
         shell: bash
         env:
+          FOLKPATCH_KEY_SECRET: ${{ secrets.FOLKPATCH_SUPERKEY }}
+          FOLKPATCH_KEY_INPUT: ${{ inputs.folkpatch_superkey }}
           APATCH_KEY_SECRET: ${{ secrets.APATCH_SUPERKEY }}
-          APATCH_KEY_INPUT: ${{ inputs.apatch_superkey }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Superkey: secret APATCH_SUPERKEY > input apatch_superkey > gagal eksplisit.
-          # Key TIDAK PERNAH di-echo ke log (tidak ada set -x di langkah ini) dan
-          # didaftarkan sebagai masker agar tak bocor bila terbawa output tool.
-          SUPERKEY="${APATCH_KEY_SECRET:-}"
+          # Superkey: secret FOLKPATCH_SUPERKEY > input folkpatch_superkey > secret APATCH_SUPERKEY > gagal.
+          SUPERKEY="${FOLKPATCH_KEY_SECRET:-}"
           if [ -z "$SUPERKEY" ]; then
-            SUPERKEY="${APATCH_KEY_INPUT:-}"
+            SUPERKEY="${FOLKPATCH_KEY_INPUT:-}"
           fi
           if [ -z "$SUPERKEY" ]; then
-            echo "::error::Superkey APatch kosong! Isi secret APATCH_SUPERKEY di repo settings atau input apatch_superkey."
+            SUPERKEY="${APATCH_KEY_SECRET:-}"
+          fi
+          if [ -z "$SUPERKEY" ]; then
+            echo "::error::Superkey FolkPatch kosong! Isi secret FOLKPATCH_SUPERKEY di repo settings atau input folkpatch_superkey."
             exit 1
           fi
           echo "::add-mask::$SUPERKEY"
-          echo "[+] Superkey diterima (disembunyikan dari log)."
+          echo "[+] Superkey FolkPatch diterima (disembunyikan dari log)."
 
           retry() {
             local n=0
@@ -624,8 +661,7 @@ jobs:
             return 1
           }
 
-          # Unduh kptools-linux + kpimg + kpatch dari rilis STABIL terbaru
-          # bmax121/KernelPatch (mendukung 6.1) via GitHub API.
+          # Unduh kptools-linux + kpimg-android khusus dari LyraVoid/KernelPatch (FolkPatch engine)
           TOOLS_DIR="$GITHUB_WORKSPACE/kptools"
           mkdir -p "$TOOLS_DIR"
           cd "$TOOLS_DIR"
@@ -637,20 +673,28 @@ jobs:
           if token:
               headers["Authorization"] = f"Bearer {token}"
 
+          repo = "LyraVoid/KernelPatch"
+          print(f"[+] Mengunduh KernelPatch dari https://github.com/{repo} ...")
+
+          rel = None
           try:
-              req = urllib.request.Request("https://api.github.com/repos/bmax121/KernelPatch/releases?per_page=10", headers=headers)
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest", headers=headers)
               with urllib.request.urlopen(req, timeout=20) as resp:
-                  releases = json.loads(resp.read().decode("utf-8"))
+                  rel = json.loads(resp.read().decode("utf-8"))
           except Exception as e:
-              print(f"::error::Gagal membaca daftar rilis KernelPatch: {e}")
+              print(f"[!] Warning: Gagal query releases/latest {repo}: {e}")
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=5", headers=headers)
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  r_list = json.loads(resp.read().decode("utf-8"))
+                  non_draft = [r for r in r_list if not r.get("draft")]
+                  if non_draft:
+                      rel = non_draft[0]
+
+          if not rel:
+              print(f"::error::Tidak ada rilis KernelPatch yang ditemukan di https://github.com/{repo}!")
               sys.exit(1)
 
-          stable = [r for r in releases if not r.get("prerelease") and not r.get("draft")]
-          if not stable:
-              print("::error::Tidak ada rilis stabil KernelPatch!")
-              sys.exit(1)
-          rel = stable[0]
-          print(f"[+] KernelPatch {rel.get('tag_name')} — {rel.get('name')}")
+          print(f"[+] KernelPatch {rel.get('tag_name')} — {rel.get('name')} (dari {repo})")
           assets = rel.get("assets", [])
 
           def find(exact, *subs):
@@ -665,10 +709,9 @@ jobs:
 
           kt = find("kptools-linux", "kptools", "linux")
           ki = find("kpimg-android", "kpimg")
-          kp = find("kpatch-android", "kpatch")
-          missing = [label for obj, label in ((kt, "kptools-linux"), (ki, "kpimg"), (kp, "kpatch")) if obj is None]
+          missing = [label for obj, label in ((kt, "kptools-linux"), (ki, "kpimg-android")) if obj is None]
           if missing:
-              print(f"::error::Asset KernelPatch tidak ditemukan: {', '.join(missing)}")
+              print(f"::error::Asset KernelPatch tidak ditemukan di {repo}: {', '.join(missing)}")
               print("Asset tersedia: " + ", ".join(a["name"] for a in assets))
               sys.exit(1)
 
@@ -681,9 +724,8 @@ jobs:
           try:
               dl(kt, "kptools")
               dl(ki, "kpimg")
-              dl(kp, "kpatch")
           except Exception as e:
-              print(f"::error::Gagal mengunduh asset KernelPatch: {e}")
+              print(f"::error::Gagal mengunduh asset KernelPatch dari {repo}: {e}")
               sys.exit(1)
           EOF
           chmod +x "$TOOLS_DIR/kptools"
@@ -705,15 +747,50 @@ jobs:
             echo "::error::File Image mentah tidak ditemukan (out/arch/arm64/boot/Image)!"
             exit 1
           fi
-          echo "[+] Patching $IMAGE dengan KernelPatch..."
-          "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -K "$TOOLS_DIR/kpatch" -o "$IMAGE.patched"
+          echo "=== Diagnostik pra-kptools (Image mentah) ==="
+          ls -la "$IMAGE" || true
+          stat -c "size=%s bytes" "$IMAGE" || true
+          file "$IMAGE" || true
+          head -c 64 "$IMAGE" | od -A x -t x1z || true
+
+          # Diagnostik simbol kallsyms dari System.map untuk memverifikasi offset akurat
+          python3 - << 'EOF' "$IMAGE"
+          import sys, glob
+          img_path = sys.argv[1]
+          with open(img_path, "r+b") as f:
+              hdr = f.read(8)
+              if len(hdr) >= 8 and hdr[0:4] == b'\x1f\x20\x03\xd5' and (hdr[7] & 0xfc) == 0x14:
+                  print("[+] Terdeteksi Image ARM64 non-EFI (NOP di offset 0, branch di offset 4).")
+                  print("[+] Menyesuaikan 4 byte pertama dengan opcode ARM64 EFI MZ (ccmp x18, #0, #0xd, pl)...")
+                  f.seek(0)
+                  f.write(b'\x4d\x5a\x40\xfa')
+                  f.flush()
+                  print("[+] Header berhasil disesuaikan untuk kptools.")
+
+          # Cetak referensi simbol System.map bila tersedia
+          maps = glob.glob("out/System.map") + glob.glob("System.map")
+          if maps:
+              syms = {}
+              with open(maps[0], "r", errors="ignore") as mf:
+                  for line in mf:
+                      parts = line.strip().split()
+                      if len(parts) >= 3 and parts[2] in ("linux_banner", "kallsyms_token_table", "kallsyms_token_index", "kallsyms_markers", "kallsyms_names"):
+                          syms[parts[2]] = int(parts[0], 16)
+              if syms:
+                  print(f"[+] Simbol dari {maps[0]}:")
+                  for k, v in syms.items():
+                      print(f"    {k:22s}: 0x{v:016x}")
+          EOF
+
+          echo "[+] Patching $IMAGE dengan KernelPatch (FolkPatch)..."
+          "$TOOLS_DIR/kptools" -p -i "$IMAGE" -S "$SUPERKEY" -k "$TOOLS_DIR/kpimg" -o "$IMAGE.patched"
           if [ ! -s "$IMAGE.patched" ]; then
             echo "::error::kptools gagal menghasilkan Image ter-patch!"
             exit 1
           fi
           mv -f "$IMAGE.patched" "$IMAGE"
           rm -f "$(dirname "$IMAGE")/Image.lz4"
-          echo "[+] KernelPatch tertanam ke $IMAGE (Image.lz4 basi dihapus; langkah ZIP akan kompres ulang)."
+          echo "[+] KernelPatch (FolkPatch) tertanam ke $IMAGE (Image.lz4 basi dihapus; langkah ZIP akan kompres ulang)."
 
       - name: Copy Images & Create ZIP
         shell: bash
@@ -774,7 +851,7 @@ jobs:
           EOF
 
       - name: Fetch Manager APK
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'APatch' }}
+        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -791,8 +868,8 @@ jobs:
               headers["Authorization"] = f"token {token}"
 
           variant = os.environ.get("VARIANT", "")
-          if variant == "APatch":
-              repo = "bmax121/APatch"
+          if variant == "FolkPatch":
+              repo = "LyraVoid/FolkPatch"
           else:
               repo = "KernelSU-Next/KernelSU-Next"
 
@@ -812,7 +889,7 @@ jobs:
                       except Exception as dl_err:
                           print(f"[!] Warning: Gagal mengunduh {a['name']}: {dl_err}")
           except Exception as e:
-              print(f"[!] Warning: Failed to fetch manager APK: {e}")
+              print(f"[!] Warning: Failed to query {repo}: {e}")
           EOF
 
       - name: Upload Kernel Artifact
@@ -827,7 +904,7 @@ jobs:
             !${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload NoMount Metamodule Artifact
-        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'APatch' }}
+        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-clang
@@ -836,6 +913,7 @@ jobs:
             ${{ github.workspace }}/NoMount-*.sha256
 
       - name: Upload Manager APK Artifact
+        if: ${{ matrix.variant == 'KernelSU-Next' || matrix.variant == 'FolkPatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: Manager-APK-${{ inputs.codename }}-${{ matrix.variant }}-clang
