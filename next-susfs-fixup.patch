@@ -419,14 +419,14 @@
 # (mekanisme sulog diganti pending-event di implementasi baru).
 --- a/kernel/feature/sucompat.c
 +++ b/kernel/feature/sucompat.c
-@@ -24,28 +24,34 @@
+@@ -24,28 +24,35 @@
  #include "klog.h" // IWYU pragma: keep
  #include "runtime/ksud.h"
  #include "feature/sucompat.h"
 +#include "feature/adb_root.h"
  #include "policy/app_profile.h"
 -#include "hook/syscall_hook.h"
--#include "supercall/supercall.h"
+ #include "supercall/supercall.h"
  #include "sulog/event.h"
 -#include "ksu.h"
 -#include "util.h"
