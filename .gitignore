@@ -7,3 +7,5 @@ susfs4ksu/
 KernelSU-Next/
 rej-pre-overlay/
 scratch/
+*.log
+*.txt
