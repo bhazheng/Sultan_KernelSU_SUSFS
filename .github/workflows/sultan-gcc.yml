@@ -536,6 +536,11 @@ jobs:
           #    --start-group ${libs} --end-group dapat meresolusi simbol dari arch/arm64/lib/lib.a
           #    dan lib/lib.a bila ada referensi simbol lib yang tersisa.
           sed -i 's|libs=$|libs="${KBUILD_VMLINUX_LIBS}"|' scripts/link-vmlinux.sh
+          # 4. Sediakan fallback __weak untuk exynos_acme_ect_freq pada gs_tmu_v3.c
+          #    agar linker tidak gagal dengan "undefined symbol: exynos_acme_ect_freq"
+          #    pada target di mana ECT table tidak diaktifkan di exynos-acme.c (misal gs201):
+          sed -i 's/int exynos_acme_ect_freq(int cpu, u8 cdev_index);/int __attribute__((weak)) exynos_acme_ect_freq(int cpu, u8 cdev_index) { return 0; }/' google-modules/soc/gs/drivers/thermal/samsung/gs_tmu_v3.c 2>/dev/null || true
+
 
       - name: Build the Kernel
         shell: bash
