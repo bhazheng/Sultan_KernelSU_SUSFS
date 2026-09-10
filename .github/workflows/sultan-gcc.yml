@@ -243,36 +243,8 @@ jobs:
 
             # Pastikan patch_memory.o (penyedia ksu_patch_text untuk selinux_hide)
             # selalu di-compile untuk target architecture tanpa bergantung pada KPROBES
-            python3 - << 'EOF'
-            with open("KernelSU-Next/kernel/Kbuild", "r") as f:
-                c = f.read()
-
-            target = """# Core utilities ('selinux hide'/hooks)
-ifeq ($(strip $(CONFIG_KPROBES)),y)
-kernelsu-objs += hook/lsm_hook.o
-ifdef KSU_ARCH
-kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o
-endif
-endif"""
-
-            replacement = """# Core utilities ('selinux hide'/hooks)
-ifeq ($(strip $(CONFIG_KPROBES)),y)
-kernelsu-objs += hook/lsm_hook.o
-endif
-ifdef KSU_ARCH
-kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o
-endif"""
-
-            if target in c:
-                c = c.replace(target, replacement)
-            else:
-                c = c.replace("kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o\n", "")
-                c = c.replace("kernelsu-objs += feature/selinux_hide.o\n", "kernelsu-objs += feature/selinux_hide.o\nifdef KSU_ARCH\nkernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o\nendif\n")
-
-            with open("KernelSU-Next/kernel/Kbuild", "w") as f:
-                f.write(c)
-            print("[+] Successfully ensured patch_memory.o is compiled for selinux_hide without KPROBES")
-EOF
+            sed -i '/kernelsu-objs += hook\/$(KSU_ARCH)\/patch_memory.o/d' KernelSU-Next/kernel/Kbuild
+            sed -i '/kernelsu-objs += feature\/selinux_hide.o/a ifdef KSU_ARCH\nkernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o\nendif' KernelSU-Next/kernel/Kbuild
           fi
 
           # Pastikan registrasi ke Kconfig dan Makefile rapi
