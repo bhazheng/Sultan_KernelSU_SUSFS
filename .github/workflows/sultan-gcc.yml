@@ -236,6 +236,10 @@ jobs:
             echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
             git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+
+            # Hapus pembatasan depends on KPROBES pada Kconfig KernelSU agar CONFIG_KSU
+            # dapat aktif pada kernel non-modular Sultan (yang memakai SuSFS inline hook)
+            sed -i '/depends on KPROBES/d' KernelSU-Next/kernel/Kconfig
           fi
 
           # Pastikan registrasi ke Kconfig dan Makefile rapi
