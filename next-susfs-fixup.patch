@@ -42,14 +42,15 @@
 # sulog.h sebagai konteks, blank-line reformat di exit.
 --- a/kernel/core/init.c
 +++ b/kernel/core/init.c
-@@ -6,5 +6,6 @@
+@@ -5,6 +5,7 @@
+ #include <linux/rcupdate.h>
  #include <linux/sched.h>
  #include <linux/workqueue.h>
 +#include <linux/susfs.h>
  
  #include "policy/allowlist.h"
  #include "policy/app_profile.h"
-@@ -18,19 +18,12 @@
+@@ -18,19 +19,12 @@
  #include "ksu.h"
  #include "infra/file_wrapper.h"
  #include "selinux/selinux.h"
@@ -58,9 +59,7 @@
  #include "feature/selinux_hide.h"
  #include "feature/sulog.h"
  #include "infra/symbol_resolver.h"
-+#include "hook/setuid_hook.h"
-+#include "feature/sucompat.h"
- 
+-
 -#if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
 -#include <asm/cpufeature.h>
 -#include <linux/version.h>
@@ -68,10 +67,13 @@
 -#error "FATAL: Your kernel is missing the indirect syscall bypass patches!"
 -#endif
 -#endif
--
++#include "hook/setuid_hook.h"
++#include "feature/sucompat.h"
+ 
  // workaround for A12-5.10 kernel
  // Some third-party kernel (e.g. linegaeOS) uses wrong toolchain, which supports
-@@ -89,27 +89,5 @@ module_param_named(norc, ksu_no_custom_rc, bool, 0);
+@@ -88,28 +82,6 @@
+ 
  int __init kernelsu_init(void)
  {
 -#if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
@@ -99,7 +101,7 @@
  #ifdef CONFIG_KSU_DEBUG
  	pr_alert("*************************************************************");
  	pr_alert("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE    **");
-@@ -119,6 +119,7 @@ int __init kernelsu_init(void)
+@@ -119,6 +91,7 @@
  	pr_alert("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE    **");
  	pr_alert("*************************************************************");
  #endif
@@ -107,8 +109,7 @@
  	if (allow_shell) {
  		pr_alert("shell is allowed at init!");
  	}
-@@ -129,76 +129,41 @@ int __init kernelsu_init(void)
- 		return -ENOSYS;
+@@ -130,75 +103,40 @@
  	}
  
  	ksu_init_symbol_resolver();
@@ -125,57 +126,57 @@
  
  	ksu_supercalls_init();
 -	ksu_app_profile_init();
--
+ 
 -	if (ksu_late_loaded) {
 -		pr_info("late load mode, skipping kprobe hooks\n");
++    ksu_sucompat_init();
  
 -		apply_kernelsu_rules();
 -		cache_sid();
 -		setup_ksu_cred();
-+    ksu_sucompat_init();
++    ksu_setuid_hook_init();
  
 -		// Grant current process (ksud late-load) root
 -		// with KSU SELinux domain before enforcing SELinux, so it
 -		// can continue to access /data/app etc. after enforcement.
 -		escape_to_root_for_init();
-+    ksu_setuid_hook_init();
++    ksu_sulog_init();
  
 -		ksu_allowlist_init();
 -		ksu_load_allow_list();
--
++    ksu_adb_root_init();
+ 
 -		ksu_syscall_hook_manager_init();
--
++    ksu_selinux_hide_init();
+ 
 -		ksu_throne_tracker_init();
 -		ksu_observer_init();
 -		ksu_file_wrapper_init();
--
++    ksu_allowlist_init();
+ 
 -		ksu_boot_completed = true;
 -		track_throne(false);
-+    ksu_sulog_init();
++    ksu_throne_tracker_init();
  
 -		if (!getenforce()) {
 -			pr_info("Permissive SELinux, enforcing\n");
 -			setenforce(true);
 -		}
-+    ksu_adb_root_init();
++    ksu_ksud_init();
  
 -	} else {
 -		ksu_syscall_hook_manager_init();
-+    ksu_selinux_hide_init();
- 
--		ksu_allowlist_init();
-+    ksu_allowlist_init();
- 
--		ksu_throne_tracker_init();
-+    ksu_throne_tracker_init();
- 
--		ksu_ksud_init();
-+    ksu_ksud_init();
- 
--		ksu_file_wrapper_init();
--	}
 +    ksu_file_wrapper_init();
  
+-		ksu_allowlist_init();
+-
+-		ksu_throne_tracker_init();
+-
+-		ksu_ksud_init();
+-
+-		ksu_file_wrapper_init();
+-	}
+-
 -#ifdef MODULE
 -#ifndef CONFIG_KSU_DEBUG
 -	kobject_del(&THIS_MODULE->mkobj.kobj);
@@ -197,20 +198,15 @@
  
  	// Wait for any in-flight RCU readers (e.g. handler traversing allow_list)
  	synchronize_rcu();
-@@ -211,13 +211,11 @@ void __exit kernelsu_exit(void)
+@@ -211,8 +149,6 @@
  	ksu_allowlist_exit();
  
  	ksu_selinux_hide_exit();
- 
--	ksu_lsm_hook_exit();
 -
+-	ksu_lsm_hook_exit();
+ 
  	ksu_adb_root_exit();
  
- 	ksu_sulog_exit();
- 
- 	ksu_feature_exit();
- 
- 	put_cred(ksu_cred);
 # Overlay fixup susfs-next (10_enable): hapus filter lama
 # ksu_handle_umount (skenario/is_appuid/umount-check/zygote-check). Adaptasi: tab-dev (3 context lines @83).
 --- a/kernel/feature/kernel_umount.c
