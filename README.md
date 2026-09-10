@@ -51,8 +51,8 @@ To get boot.img format:
 # Credits
 
 - **KernelSU**: Developed by [tiann](https://github.com/tiann/KernelSU).
-- **KernelSU-Next**: Developed by [rifsxd](https://github.com/KernelSU-Next/KernelSU-Next).
-- **SUSFS**: Developed by [simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git).
+- **KernelSU-Next**: Developed by [rifsxd](https://github.com/KernelSU-Next/KernelSU-Next), dev-susfs fork by [pershoot](https://github.com/pershoot/KernelSU-Next).
+- **SUSFS**: Developed by [simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git), gki-android14-6.1 fork by [pershoot](https://gitlab.com/pershoot/susfs4ksu.git).
 - **SUSFS Module**: Developed by [sidex15](https://github.com/sidex15).
 - **Sultan Kernels**: Developed by [kerneltoast](https://github.com/kerneltoast).
 
