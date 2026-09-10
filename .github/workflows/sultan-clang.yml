@@ -273,6 +273,39 @@ jobs:
             # Hapus pembatasan depends on KPROBES pada Kconfig KernelSU agar CONFIG_KSU
             # dapat aktif pada kernel non-modular Sultan (yang memakai SuSFS inline hook)
             sed -i '/depends on KPROBES/d' KernelSU-Next/kernel/Kconfig
+
+            # Pastikan patch_memory.o (penyedia ksu_patch_text untuk selinux_hide)
+            # selalu di-compile untuk target architecture tanpa bergantung pada KPROBES
+            python3 - << 'EOF'
+            with open("KernelSU-Next/kernel/Kbuild", "r") as f:
+                c = f.read()
+
+            target = """# Core utilities ('selinux hide'/hooks)
+ifeq ($(strip $(CONFIG_KPROBES)),y)
+kernelsu-objs += hook/lsm_hook.o
+ifdef KSU_ARCH
+kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o
+endif
+endif"""
+
+            replacement = """# Core utilities ('selinux hide'/hooks)
+ifeq ($(strip $(CONFIG_KPROBES)),y)
+kernelsu-objs += hook/lsm_hook.o
+endif
+ifdef KSU_ARCH
+kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o
+endif"""
+
+            if target in c:
+                c = c.replace(target, replacement)
+            else:
+                c = c.replace("kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o\n", "")
+                c = c.replace("kernelsu-objs += feature/selinux_hide.o\n", "kernelsu-objs += feature/selinux_hide.o\nifdef KSU_ARCH\nkernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o\nendif\n")
+
+            with open("KernelSU-Next/kernel/Kbuild", "w") as f:
+                f.write(c)
+            print("[+] Successfully ensured patch_memory.o is compiled for selinux_hide without KPROBES")
+EOF
           fi
 
           # Pastikan registrasi ke Kconfig dan Makefile rapi
@@ -285,9 +318,11 @@ jobs:
 
           # Matikan warning misleading-indentation di tree KernelSU untuk mencegah
           # compiler memperlakukannya sebagai fatal error (-Werror)
-          if [ -f drivers/kernelsu/Makefile ]; then
-            echo "subdir-ccflags-y += -Wno-misleading-indentation" >> drivers/kernelsu/Makefile
-          fi
+          for kf in KernelSU-Next/kernel/Kbuild KernelSU-Next/kernel/Makefile; do
+            if [ -f "$kf" ] && ! grep -q "Wno-misleading-indentation" "$kf"; then
+              echo "subdir-ccflags-y += -Wno-misleading-indentation" >> "$kf"
+            fi
+          done
 
           # Validasi
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || {
