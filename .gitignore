@@ -4,4 +4,5 @@ rej*.zip
 sim_test
 tensynos_inspect
 susfs4ksu
-KernelSU-Next
+KernelSU-Nextrej-pre-overlay
+scratch
