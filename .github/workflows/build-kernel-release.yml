@@ -25,6 +25,14 @@ on:
           - "both"
           - "gcc"
           - "clang"
+      android_version:
+        description: "Android version"
+        required: false
+        default: "android16"
+        type: choice
+        options:
+          - "android16"
+          - "android14"
 
 jobs:
   build-kernel-gs201-gcc:
@@ -33,7 +41,7 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      android_version: "android14"
+      android_version: ${{ inputs.android_version || 'android16' }}
       kernel_version: "6.1"
       variants: ${{ inputs.variants }}
 
@@ -43,7 +51,7 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      android_version: "android14"
+      android_version: ${{ inputs.android_version || 'android16' }}
       kernel_version: "6.1"
       variants: ${{ inputs.variants }}
 

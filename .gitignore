@@ -9,3 +9,5 @@ rej-pre-overlay/
 scratch/
 *.log
 *.txt
+pershoot_ksun/
+pershoot_susfs/

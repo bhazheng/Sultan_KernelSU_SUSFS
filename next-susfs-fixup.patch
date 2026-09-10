@@ -1,10 +1,8 @@
 # ============================================================
-# NEXT-SUSFS-FIXUP — gabungan 7 overlay (10_enable, Ante0-baseline)
-# Terbit: v1.3.0 | Terapkan: patch -p1 dari root KernelSU-Next mandiri.
-# Fix: Hunk umount menggunakan 3 baris konteks kanonis @83 (menghilangkan ambiguitas duplikasi if return 0 di @79).
-# Fix: Hunk dispatch.c menghapus ksu_bundled & ksu_late_loaded dari do_get_info().
-# Urutan hunk bebas (target disjoint); urutan bawah deterministik & terverifikasi.
-# File pecah per-target tetap tersedia di direktori yang sama.
+# [DEPRECATED / DISABLED] NEXT-SUSFS-FIXUP
+# NOTE: File ini dinonaktifkan karena proyek telah beralih menggunakan
+# fork pershoot KernelSU-Next (branch dev-susfs) dan susfs4ksu (branch gki-android14-6.1)
+# yang sudah mengintegrasikan SuSFS secara native tanpa membutuhkan patch overlay.
 # ============================================================
 # Overlay fixup susfs-next (10_enable): hapus objek hook kprobe dari link.
 # Sumber: 10_enable_susfs_for_ksu.patch hunk#1 (@@ -4,24). Adaptasi: tambah

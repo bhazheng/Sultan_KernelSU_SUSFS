@@ -12,9 +12,9 @@ on:
         default: "gs201"
         type: string
       android_version:
-        description: "Android version (e.g. android14)"
+        description: "Android version (e.g. android16 or android14)"
         required: true
-        default: "android14"
+        default: "android16"
         type: string
       kernel_version:
         description: "Kernel version (e.g. 6.1)"
@@ -122,16 +122,16 @@ jobs:
         run: |
           set -euo pipefail
           echo "[+] Cloning dependencies in parallel (shallow + partial)..."
-          # Kernel tidak butuh histori git: versi di-anchor manual
-          # (LOCALVERSION_AUTO=0 + setlocalversion dinetralkan), jadi full
-          # clone multi-GB diganti shallow + partial (--depth=1,
-          # --filter=blob:none) — biasanya memangkas 3 menit++ menjadi
-          # <1 menit. Fallback ke shallow biasa bila server menolak
-          # partial clone.
+          KERNEL_BRANCH="16.0.0-sultan"
+          if [ "${{ inputs.android_version }}" = "android14" ]; then
+            KERNEL_BRANCH="android14-6.1.145"
+          fi
+          echo "[+] Target kernel branch: $KERNEL_BRANCH"
+
           clone_kernel() {
             local n=0
             until [ "$n" -ge 2 ]; do
-              if git -c protocol.version=2 clone --depth=1 --single-branch --no-tags --filter=blob:none https://github.com/bhazheng/android_kernel_google_tensynos android_kernel_google_tensynos; then
+              if git -c protocol.version=2 clone --depth=1 --single-branch --no-tags --filter=blob:none https://github.com/bhazheng/android_kernel_google_tensynos -b "$KERNEL_BRANCH" android_kernel_google_tensynos; then
                 return 0
               fi
               n=$((n+1))
@@ -140,16 +140,14 @@ jobs:
               sleep 5
             done
             echo "[*] Partial clone ditolak server — fallback ke shallow penuh." >&2
-            git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/bhazheng/android_kernel_google_tensynos android_kernel_google_tensynos
+            git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/bhazheng/android_kernel_google_tensynos -b "$KERNEL_BRANCH" android_kernel_google_tensynos
           }
           git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" AnyKernel3 &
 
           clone_kernel &
 
-          # FS-side dari branch Sultan (50_add rebased untuk tree tensynos;
-          # hunk sys.c/readdir/task_mmu mengikuti konteks Sultan). Sisi-KSU tetap
-          # glue 10_enable (byte-identik di kedua branch susfs — verifikasi SHA).
-          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://gitlab.com/simonpunk/susfs4ksu.git -b "sultan-shiba-susfs-minimal" susfs4ksu &
+          # SuSFS upstream dari fork pershoot (branch gki-android14-6.1)
+          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://gitlab.com/pershoot/susfs4ksu.git -b "gki-android14-6.1" susfs4ksu &
 
           # Tunggu semua clone paralel selesai sebelum langkah berikut.
           wait
@@ -188,8 +186,8 @@ jobs:
           config = os.environ.get("CONFIG", "android_kernel_google_tensynos")
           shas = {
               "kernel_tree_bhazheng": local_head(config),
-              "KernelSU-Next_dev": ls_remote("https://github.com/KernelSU-Next/KernelSU-Next.git", "refs/heads/dev"),
-              "susfs4ksu_sultan-shiba-susfs-minimal": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/sultan-shiba-susfs-minimal"),
+              "KernelSU-Next_pershoot": ls_remote("https://github.com/pershoot/KernelSU-Next.git", "refs/heads/dev-susfs"),
+              "susfs4ksu_pershoot": ls_remote("https://gitlab.com/pershoot/susfs4ksu.git", "refs/heads/gki-android14-6.1"),
               "nomount_dev": ls_remote("https://github.com/maxsteeel/nomount.git", "refs/heads/dev"),
           }
           with open("upstream-shas.json", "w") as f:
@@ -235,10 +233,9 @@ jobs:
           }
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
-            echo "[+] Adding KernelSU-Next resmi (branch dev)..."
-            curl -LSs --retry 5 --retry-delay 5 --retry-all-errors \
-              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-              | bash -s dev
+            echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
+            git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
+            ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           fi
 
           # Pastikan registrasi ke Kconfig dan Makefile rapi
@@ -275,14 +272,6 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
-          # Resep mandiri: Next resmi `dev` +
-          # susfs shiba (50_add + 10_enable) + overlay milik kita.
-          # urutan = copy susfs -> 50_add (tree) -> 10_enable (KernelSU-Next)
-          # -> overlay (gerbang keras) -> fixer sys-uname (tree).
-          # unicode_bypass Next dicakup langkah Optimization (post-50_add);
-          # bila 50_add butuh konteks pre-unicode, reject-nya masuk .rej dan
-          # dilipat ke overlay pada putaran berikut (loop konvergensi).
-          # Target -d "KernelSU-Next" karena path patch berbentuk a/kernel/....
           SUSFS_DIR="../susfs4ksu/kernel_patches"
           KSUN_DIR="KernelSU-Next"
 
@@ -290,73 +279,41 @@ jobs:
           cp "$SUSFS_DIR/fs/"* ./fs/
           cp "$SUSFS_DIR/include/linux/"* ./include/linux/
 
-          patch -p1 < "$SUSFS_DIR/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch" \
-            || echo "::warning::50_add_susfs gagal diterapkan, lanjut."
-
-          patch -d "$KSUN_DIR" -p1 < "$SUSFS_DIR/KernelSU/10_enable_susfs_for_ksu.patch" \
-            || echo "::warning::10_enable_susfs gagal diterapkan, reject akan dikumpulkan untuk dianalisis."
-
-          # Arsipkan .rej pra-overlay & overlay fixup (next-susfs-fixup.patch)
-          # Reject murni dari 10_enable_susfs dipindahkan ke rej-pre-overlay/
-          # agar next-susfs-fixup.patch menutup semua reject tersebut.
-          mkdir -p rej-pre-overlay
-          while IFS= read -r -d '' f; do
-            rel="${f#./}"
-            mkdir -p "rej-pre-overlay/$(dirname "$rel")"
-            mv -f "$f" "rej-pre-overlay/$rel"
-          done < <(find . -type f -name "*.rej" -print0)
-
-          OVERLAY_URL="https://raw.githubusercontent.com/bhazheng/Sultan_KernelSU_SUSFS/refs/heads/main/next-susfs-fixup.patch"
-          OVERLAY_FILE="$GITHUB_WORKSPACE/next-susfs-fixup.patch"
-          if [ -f "$OVERLAY_FILE" ]; then
-            echo "[+] Menggunakan next-susfs-fixup.patch lokal dari root repositori..."
+          # Terapkan patch SuSFS adaptasi Sultan untuk tree kernel (50_add)
+          SULTAN_PATCH="$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-sultan.patch"
+          if [ -f "$SULTAN_PATCH" ]; then
+            echo "[+] Menerapkan patch SuSFS adaptasi Sultan (50_add)..."
+            patch -p1 < "$SULTAN_PATCH" || {
+              echo "::error::Patch SuSFS adaptasi Sultan gagal diterapkan!"
+              exit 1
+            }
           else
-            echo "[+] Mengunduh next-susfs-fixup.patch dari remote..."
-            curl -fsSL --retry 3 "$OVERLAY_URL" -o "$OVERLAY_FILE"
+            echo "[-] Patch lokal tidak ditemukan, fallback ke patch upstream pershoot..."
+            patch -p1 < "$SUSFS_DIR/50_add_susfs_in_gki-android14-6.1.patch" || {
+              echo "::error::Patch SuSFS upstream gagal diterapkan!"
+              exit 1
+            }
           fi
-          echo "--- overlay yang digunakan: ---"
-          sha256sum "$OVERLAY_FILE"
-          patch -d "$KSUN_DIR" -p1 < "$OVERLAY_FILE" || {
-            echo "::error::Overlay GAGAL teraplikasi — build dihentikan. Cek artifact .rej."
-            exit 1
-          }
 
-          # Cetak daftar dan isi semua file .rej yang ditemukan ke log console
-          echo "=== Daftar file .rej yang ditemukan pasca-overlay ==="
-          find . -type f -name "*.rej" -print || true
-          for rf in $(find . -type f -name "*.rej"); do
-            echo "::warning file=$rf::Reject ditemukan pada $rf"
-            echo "--- ISI $rf ---"
-            cat "$rf" || true
-            echo "----------------"
-          done
+          # Catatan: pershoot/KernelSU-Next branch dev-susfs sudah memiliki integrasi SuSFS secara native,
+          # sehingga 10_enable_susfs_for_ksu.patch dan next-susfs-fixup.patch TIDAK DIPERLUKAN lagi.
+
+          # Cetak daftar file .rej jika ada
+          echo "=== Pemeriksaan file .rej ==="
+          REJ_COUNT=$(find . -name "*.rej" | wc -l)
+          if [ "$REJ_COUNT" -gt 0 ]; then
+            echo "::error::Ditemukan $REJ_COUNT file .rej pasca-patch SuSFS!"
+            find . -name "*.rej" -print
+            exit 1
+          fi
 
           # Gerbang verifikasi konsistensi SUSFS/KSU:
           echo "=== Verifikasi konsistensi patch SUSFS/KSU ==="
-          REJ_CRIT=0
-          for r in \
-            "$KSUN_DIR/kernel/core/init.c.rej" \
-            "$KSUN_DIR/kernel/Kbuild.rej" \
-            "$KSUN_DIR/kernel/supercall/dispatch.c.rej" \
-            "$KSUN_DIR/kernel/supercall/supercall.c.rej" \
-            "$KSUN_DIR/kernel/feature/sucompat.c.rej" \
-            "$KSUN_DIR/kernel/hook/setuid_hook.c.rej" \
-            "$KSUN_DIR/kernel/feature/kernel_umount.c.rej" \
-          ; do
-            if [ -f "$r" ]; then
-              echo "::error::Reject kritis ditemukan pasca-overlay: $r"
-              REJ_CRIT=1
-            fi
-          done
           if ! grep -rq "susfs_init" "$KSUN_DIR/kernel/" 2>/dev/null; then
             echo "::error::susfs_init tidak ditemukan di $KSUN_DIR/kernel/ — wiring SUSFS hilang."
-            REJ_CRIT=1
-          fi
-          if [ "$REJ_CRIT" -eq 1 ]; then
-            echo "::error::Patch SUSFS/KSU memiliki reject pasca-overlay — build dihentikan. Cek log di atas dan unduh artifact rej-*.zip."
             exit 1
           fi
-          echo "[+] Konsistensi patch SUSFS/KSU OK."
+          echo "[+] Konsistensi patch SUSFS/KSU OK (pershoot dev-susfs native)."
 
       - name: Apply Optimization & Network Patches
         shell: bash
@@ -522,23 +479,9 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
           sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
 
-          # Perbaikan duplikasi init_uts_ns & linux_banner sesuai standar Linux 6.1 upstream:
-          # 1. Hapus #include "version-timestamp.c" dari init/version.c sehingga hanya menyisakan
-          #    deklarasi __weak; implementasi non-weak sebenarnya tetap berada di version-timestamp.o
-          #    yang di-link di scripts/link-vmlinux.sh.
-          sed -i '/version-timestamp\.c/d' init/version.c
-          # 2. Hapus init/version-timestamp.o dari vmlinux.o agar tidak dobel link,
-          #    TETAPI pertahankan $(KBUILD_VMLINUX_LIBS) (arch/arm64/lib/lib.a) di dalam
-          #    --whole-archive agar simbol vital arsitektur seperti arch/arm64/lib/tishift.o
-          #    (__lshrti3, __ashrti3, __ashlti3) tidak terbuang oleh linker saat LTO.
-          sed -i 's| init/version-timestamp\.o||g' scripts/Makefile.vmlinux_o
-          # 3. Pada scripts/link-vmlinux.sh, jangan kosongkan libs saat LTO aktif, agar
-          #    --start-group ${libs} --end-group dapat meresolusi simbol dari arch/arm64/lib/lib.a
-          #    dan lib/lib.a bila ada referensi simbol lib yang tersisa.
-          sed -i 's|libs=$|libs="${KBUILD_VMLINUX_LIBS}"|' scripts/link-vmlinux.sh
-          # 4. Sediakan fallback __weak untuk exynos_acme_ect_freq pada gs_tmu_v3.c
-          #    agar linker tidak gagal dengan "undefined symbol: exynos_acme_ect_freq"
-          #    pada target di mana ECT table tidak diaktifkan di exynos-acme.c (misal gs201):
+          # Sediakan fallback __weak untuk exynos_acme_ect_freq pada gs_tmu_v3.c
+          # agar linker tidak gagal dengan "undefined symbol: exynos_acme_ect_freq"
+          # pada target di mana ECT table tidak diaktifkan di exynos-acme.c (misal gs201):
           sed -i 's/int exynos_acme_ect_freq(int cpu, u8 cdev_index);/int __attribute__((weak)) exynos_acme_ect_freq(int cpu, u8 cdev_index) { return 0; }/' google-modules/soc/gs/drivers/thermal/samsung/gs_tmu_v3.c 2>/dev/null || true
 
 
