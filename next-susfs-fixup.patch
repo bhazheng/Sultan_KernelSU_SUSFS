@@ -1,7 +1,8 @@
 # ============================================================
-# NEXT-SUSFS-FIXUP — gabungan 6 overlay (10_enable, Ante0-baseline)
-# Terbit: v1.2.0 | Terapkan: patch -p1 dari root KernelSU-Next mandiri.
+# NEXT-SUSFS-FIXUP — gabungan 7 overlay (10_enable, Ante0-baseline)
+# Terbit: v1.3.0 | Terapkan: patch -p1 dari root KernelSU-Next mandiri.
 # Fix: Hunk umount menggunakan 3 baris konteks kanonis @83 (menghilangkan ambiguitas duplikasi if return 0 di @79).
+# Fix: Hunk dispatch.c menghapus ksu_bundled & ksu_late_loaded dari do_get_info().
 # Urutan hunk bebas (target disjoint); urutan bawah deterministik & terverifikasi.
 # File pecah per-target tetap tersedia di direktori yang sama.
 # ============================================================
@@ -846,3 +847,28 @@
  static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
  {
      struct pt_regs *real_regs = PT_REAL_REGS(regs);
+# Overlay fixup susfs-next (10_enable): hapus referensi ksu_bundled dan ksu_late_loaded
+# dari do_get_info() yang tertinggal karena ksuver_override mengubah konteks upstream.
+--- a/kernel/supercall/dispatch.c
++++ b/kernel/supercall/dispatch.c
+@@ -46,20 +46,14 @@ static int do_get_info(void __user *arg)
+ 
+ #ifdef MODULE
+     cmd.flags |= KSU_GET_INFO_FLAG_LKM;
+-    if (ksu_bundled) {
+-        cmd.flags |= KSU_GET_INFO_FLAG_BUNDLED;
+-    }
+ #endif
+ 
+     if (ksuver_override)
+         cmd.version = ksuver_override;
+ 
+     if (is_manager()) {
+         cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
+     }
+-    if (ksu_late_loaded) {
+-        cmd.flags |= KSU_GET_INFO_FLAG_LATE_LOAD;
+-    }
+ #ifdef EXPECTED_SIZE2
+     cmd.flags |= KSU_GET_INFO_FLAG_PR_BUILD;
+ #endif
