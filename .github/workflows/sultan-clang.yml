@@ -399,7 +399,7 @@ jobs:
           COMMIT_HASH="${NOMOUNT_COMMIT:-$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)}"
           SRC_DIR="nomount_src"
           MOD_DIR="nomount_mod"
-          ZIP_OUT="NoMount-${COMMIT_HASH}.zip"
+          ZIP_OUT="NoMount.zip"
 
           rm -rf "$SRC_DIR" "$MOD_DIR"
           git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
@@ -723,7 +723,7 @@ jobs:
           fi
 
           cd ../AnyKernel3
-          ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-A16-Sultan-clang.zip"
+          ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-Sultan-clang.zip"
           zip -qr9 "../$ZIP_NAME" . -x '.git/*' -x '.github/*' -x '*.zip' -x 'README.md'
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
@@ -789,16 +789,17 @@ jobs:
             ${{ github.workspace }}/*.zip
             ${{ github.workspace }}/*.sha256
             !${{ github.workspace }}/*.apk
-            !${{ github.workspace }}/NoMount-*.zip
-            !${{ github.workspace }}/NoMount-*.sha256
+            !${{ github.workspace }}/NoMount*.zip
+            !${{ github.workspace }}/NoMount*.sha256
 
       - name: Upload NoMount Metamodule Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-clang
+          name: NoMount-Metamodule
           path: |
-            ${{ github.workspace }}/NoMount-*.zip
-            ${{ github.workspace }}/NoMount-*.sha256
+            ${{ github.workspace }}/NoMount*.zip
+            ${{ github.workspace }}/NoMount*.sha256
+          overwrite: true
 
       - name: Upload Manager APK Artifact
         if: ${{ matrix.variant == 'KernelSU-Next' }}

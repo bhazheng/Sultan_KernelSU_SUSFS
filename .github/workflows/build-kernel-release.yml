@@ -57,13 +57,17 @@ jobs:
 
   trigger-release:
     runs-on: ubuntu-latest
+    if: |
+      always() &&
+      contains(needs.*.result, 'success') &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     needs:
-        - build-kernel-gs201-gcc
-        - build-kernel-gs201-clang
+      - build-kernel-gs201-gcc
+      - build-kernel-gs201-clang
     env:
-      REPO_OWNER: TheWildJames
-      REPO_NAME: Sultan_KernelSU_SUSFS
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: "latest"
       RELEASE_NAME: "Sultan Kernels (KernelSU-Next / NoRoot) + SUSFS"
       RELEASE_NOTES: |
         This release contains Sultan gs201 kernels in 2 variants (KernelSU-Next & NoRoot) + NoMount metamodule.
@@ -91,66 +95,56 @@ jobs:
     steps:
       # Checkout the code
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Get the Latest Tag from GitHub
-      - name: Generate and Create New Tag
+      # Clean up previous releases so there is strictly 1 release
+      - name: Clean up Old Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-            # Fetch the latest tag from GitHub (this is the latest tag based on the GitHub API)
-            LATEST_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags --jq '.[0].name')
-            if [ -z "$LATEST_TAG" ]; then
-              LATEST_TAG="v2.0.0-r0"  # Default to v1.5.7-0 if no tag exists
-            fi
-            
-            # Increment the suffix (e.g., v1.5.7-0 becomes v1.5.7-1)
-            NEW_TAG=$(echo "$LATEST_TAG" | awk -F'-r' '{suffix=$2; if (!suffix) suffix=0; suffix++; printf "%s-r%d", $1, suffix}')
-            
-            # Output the new tag to be used
-            echo "New tag: $NEW_TAG"
-            
-            # Set the new tag as an environment variable to be used in later steps
-            echo "NEW_TAG=${NEW_TAG}" >> $GITHUB_ENV
-            
-            # Create the tag in the repository
-            git tag $NEW_TAG
-            git push origin $NEW_TAG
-            
-      # Download Artifacts for A12 (Only if A12 Build is successful or input is true or empty)
+          echo "[+] Deleting existing releases to keep only 1 release..."
+          for old_tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName' 2>/dev/null); do
+            echo "Deleting release: $old_tag"
+            gh release delete "$old_tag" --yes --cleanup-tag 2>/dev/null || true
+          done
+          git push origin ":refs/tags/${RELEASE_TAG}" 2>/dev/null || true
+
+      # Download Artifacts
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./downloaded-artifacts
 
-      # Create GitHub Release and upload files if make_release is true
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        with:
-          tag_name: ${{ env.NEW_TAG }}  # Use the generated tag for the release
-          release_name: ${{ env.RELEASE_NAME }}  # Pass the RELEASE_NAME to the action
-          body: ${{ env.RELEASE_NOTES }}  # Pass the RELEASE_NOTES to the action
+      # Create Single GitHub Release
+      - name: Create Single GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "[+] Creating fresh release ${RELEASE_TAG}..."
+          gh release create "${RELEASE_TAG}" \
+            --target "${{ github.sha }}" \
+            --title "${RELEASE_NAME}" \
+            --notes "${RELEASE_NOTES}"
 
       # Upload Release Assets Dynamically
       - name: Upload Release Assets Dynamically
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Loop through all files in the downloaded-artifacts directory
           for file in ./downloaded-artifacts/*/*; do
-              # Skip directories
-              if [ -d "$file" ]; then
+              # Skip non-files
+              if [ ! -f "$file" ]; then
                   continue
               fi
 
-              # Upload the file to the GitHub release
+              # Upload the file to the GitHub release with --clobber to overwrite duplicate files safely
               echo "Uploading $file..."
-              gh release upload ${{ env.NEW_TAG }} "$file"
+              gh release upload "${RELEASE_TAG}" "$file" --clobber
           done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_TAG: ${{ env.NEW_TAG }}
 
       # Display Files Uploaded
       - name: Display Files Uploaded
         run: |
           echo "GitHub release created with the following files:"
-          ls ./downloaded-artifacts/**/*
+          find ./downloaded-artifacts -type f
