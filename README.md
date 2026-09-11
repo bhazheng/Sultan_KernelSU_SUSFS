@@ -36,7 +36,7 @@ Automated continuous integration and build system for **Sultan Kernel** on Googl
 - **Networking & BBRv3**:
   - Backported BBRv3 congestion control set as default.
   - FQ & CAKE queue disciplines enabled.
-  - Force TCP NoDelay and increased socket memory buffer limits.
+  - Increased socket memory buffer limits.
 - **Storage & System Optimizations**:
   - Reduced F2FS write congestion and optimized min fsync blocks.
   - Optimized `memcmp` and memory operations.

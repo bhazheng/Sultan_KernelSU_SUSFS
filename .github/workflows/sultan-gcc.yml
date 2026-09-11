@@ -317,7 +317,6 @@ jobs:
             "silence_irq_cpu_logspam.patch"
             "optimise_memcmp.patch"
             "optimized_mem_operations.patch"
-            "force_tcp_nodelay.patch"
             "increase_sk_mem_packets.patch"
             "f2fs_reduce_congestion.patch"
             "f2fs_enlarge_min_fsync_blocks.patch"
