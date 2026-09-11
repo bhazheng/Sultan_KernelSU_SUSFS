@@ -45,6 +45,8 @@ jobs:
 
   trigger-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: |
       always() &&
       contains(needs.*.result, 'success') &&
@@ -54,7 +56,8 @@ jobs:
       - build-kernel-gs201-gcc
       - build-kernel-gs201-clang
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
       RELEASE_TAG: "latest"
       RELEASE_NAME: "Sultan Kernels (KernelSU-Next / NoRoot) + SUSFS"
       RELEASE_NOTES: |
@@ -88,7 +91,8 @@ jobs:
       # Clean up previous releases so there is strictly 1 release
       - name: Clean up Old Releases
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           echo "[+] Deleting existing releases to keep only 1 release..."
           for old_tag in $(gh release list --limit 1000 --json tagName --jq '.[].tagName' 2>/dev/null); do
@@ -106,7 +110,8 @@ jobs:
       # Create Single GitHub Release
       - name: Create Single GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           echo "[+] Creating fresh release ${RELEASE_TAG}..."
           gh release create "${RELEASE_TAG}" \
@@ -117,7 +122,8 @@ jobs:
       # Upload Release Assets Dynamically
       - name: Upload Release Assets Dynamically
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           # Loop through all files in the downloaded-artifacts directory
           find ./downloaded-artifacts -type f | while IFS= read -r file; do
