@@ -89,18 +89,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Clean up previous releases so there is strictly 1 release
-      - name: Clean up Old Releases
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          echo "[+] Deleting existing releases to keep only 1 release..."
-          for old_tag in $(gh release list --limit 1000 --json tagName --jq '.[].tagName' 2>/dev/null); do
-            echo "Deleting release: $old_tag"
-            gh release delete "$old_tag" --yes --cleanup-tag 2>/dev/null || true
-          done
-          git push origin ":refs/tags/${RELEASE_TAG}" 2>/dev/null || true
 
       # Download Artifacts
       - name: Download Artifacts
@@ -108,32 +96,24 @@ jobs:
         with:
           path: ./downloaded-artifacts
 
-      # Create Single GitHub Release
-      - name: Create Single GitHub Release
+      # Flatten and Prepare Release Assets
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-assets
+          find ./downloaded-artifacts -type f -exec cp -f {} release-assets/ \;
+          echo "Files prepared for release:"
+          ls -la release-assets/
+
+      # Publish to GitHub Releases (Using softprops/action-gh-release@v2 like in talenta)
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: ${{ env.RELEASE_NAME }}
+          body: ${{ env.RELEASE_NOTES }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          echo "[+] Creating fresh release ${RELEASE_TAG}..."
-          gh release create "${RELEASE_TAG}" \
-            --target "${{ github.sha }}" \
-            --title "${RELEASE_NAME}" \
-            --notes "${RELEASE_NOTES}"
-
-      # Upload Release Assets Dynamically
-      - name: Upload Release Assets Dynamically
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          # Loop through all files in the downloaded-artifacts directory
-          find ./downloaded-artifacts -type f | while IFS= read -r file; do
-              echo "Uploading $file..."
-              gh release upload "${RELEASE_TAG}" "$file" --clobber
-          done
-
-      # Display Files Uploaded
-      - name: Display Files Uploaded
-        run: |
-          echo "GitHub release created with the following files:"
-          find ./downloaded-artifacts -type f
