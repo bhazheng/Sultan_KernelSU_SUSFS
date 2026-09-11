@@ -315,8 +315,8 @@ jobs:
             "unicode_bypass_fix_6.1%2B.patch"
             "silence_system_logspam.patch"
             "silence_irq_cpu_logspam.patch"
-            "optimise_memcmp.patch"
-            "optimized_mem_operations.patch"
+            "ntsync/ntsync_compat_android14-6.1.patch"
+            "ntsync/ntsync_base.patch"
             "f2fs_reduce_congestion.patch"
             "f2fs_enlarge_min_fsync_blocks.patch"
           )
@@ -410,8 +410,8 @@ jobs:
             echo "CONFIG_TCP_CONG_BIC=y"
             echo "CONFIG_TCP_CONG_WESTWOOD=y"
             echo "CONFIG_TCP_CONG_HTCP=y"
-            echo "CONFIG_DEFAULT_CUBIC=y"
-            echo "CONFIG_DEFAULT_TCP_CONG=\"cubic\""
+            echo "CONFIG_DEFAULT_BBR=y"
+            echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\""
             echo "CONFIG_NET_SCH_FQ=y"
             echo "CONFIG_NET_SCH_FQ_CODEL=y"
             echo "CONFIG_NET_SCH_CAKE=y"
@@ -421,6 +421,7 @@ jobs:
             echo "CONFIG_CIFS=y"
             echo "CONFIG_CIFS_XATTR=y"
             echo "CONFIG_CIFS_POSIX=y"
+            echo "CONFIG_NTSYNC=y"
             # NOTE (Sultan): KPROBES sengaja TIDAK diset. gs201_defconfig
             # memuat CONFIG_INTEGRATE_MODULES=y, dan kernel/module/Kconfig
             # memaksa `menuconfig MODULES depends on !INTEGRATE_MODULES`,
