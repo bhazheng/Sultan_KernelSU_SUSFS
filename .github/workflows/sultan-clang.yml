@@ -255,14 +255,8 @@ jobs:
             retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
 
-            # Hapus pembatasan depends on KPROBES pada Kconfig KernelSU agar CONFIG_KSU
-            # dapat aktif pada kernel non-modular Sultan (yang memakai SuSFS inline hook)
-            sed -i '/depends on KPROBES/d' KernelSU-Next/kernel/Kconfig
-
-            # Pastikan patch_memory.o (penyedia ksu_patch_text untuk selinux_hide)
-            # selalu di-compile untuk target architecture tanpa bergantung pada KPROBES
-            sed -i '/kernelsu-objs += hook\/$(KSU_ARCH)\/patch_memory.o/d' KernelSU-Next/kernel/Kbuild
-            sed -i '/kernelsu-objs += feature\/selinux_hide.o/a ifdef KSU_ARCH\nkernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o\nendif' KernelSU-Next/kernel/Kbuild
+            echo "[+] Menerapkan patch KernelSU-Next untuk kernel Sultan non-modular..."
+            patch -p1 -d KernelSU-Next < "$GITHUB_WORKSPACE/patches/02_ksun_sultan.patch"
           fi
 
           # Pastikan registrasi ke Kconfig dan Makefile rapi
@@ -511,16 +505,8 @@ jobs:
 
           sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
-          sed -i '/echo "+"$/d' scripts/setlocalversion
-          sed -i 's/scm_version="-dirty"/scm_version=""/' scripts/setlocalversion 2>/dev/null || true
-
-          # Cegah ld.lld menduplikasi init/version-timestamp.o jika sudah ada di dalam vmlinux.o (ThinLTO)
-          # tanpa menyentuh init/version.c ataupun Makefile.vmlinux_o agar definisi init_uts_ns tetap utuh:
-          sed -i 's|objs="${objs} init/version-timestamp\.o"|if [ "$objs" != "vmlinux.o" ]; then objs="${objs} init/version-timestamp.o"; fi|' scripts/link-vmlinux.sh
-          # Sediakan fallback __weak untuk exynos_acme_ect_freq pada gs_tmu_v3.c
-          # agar linker (ld.lld) tidak gagal dengan "undefined symbol: exynos_acme_ect_freq"
-          # pada target di mana ECT table tidak diaktifkan di exynos-acme.c (misal gs201):
-          sed -i 's/int exynos_acme_ect_freq(int cpu, u8 cdev_index);/int __attribute__((weak)) exynos_acme_ect_freq(int cpu, u8 cdev_index) { return 0; }/' google-modules/soc/gs/drivers/thermal/samsung/gs_tmu_v3.c 2>/dev/null || true
+          echo "[+] Menerapkan patch perbaikan kernel Sultan..."
+          patch -p1 < "$GITHUB_WORKSPACE/patches/00_sultan_kernel_fixes.patch"
 
 
       - name: Build the Kernel
