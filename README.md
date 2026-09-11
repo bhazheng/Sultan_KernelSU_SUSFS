@@ -9,7 +9,7 @@ Automated continuous integration and build system for **Sultan Kernel** on Googl
 
 ---
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 ```
 * Your warranty is now void.
@@ -20,7 +20,7 @@ Automated continuous integration and build system for **Sultan Kernel** on Googl
 
 ---
 
-## 🌟 Features
+## Features
 
 - **Sultan Kernel (by kerneltoast / bhazheng)**:
   - Fully integrated monolithic kernel (`CONFIG_INTEGRATE_MODULES=y`) for maximum responsiveness, security, and battery efficiency.
@@ -44,7 +44,7 @@ Automated continuous integration and build system for **Sultan Kernel** on Googl
 
 ---
 
-## 📦 Build Variants & Toolchains
+## Build Variants & Toolchains
 
 The repository supports multiple build configurations:
 
@@ -60,7 +60,7 @@ The repository supports multiple build configurations:
 
 ---
 
-## 📥 Releases & Artifacts
+## Releases & Artifacts
 
 Releases are published automatically on the **[Releases](https://github.com/bhazheng/Sultan_KernelSU_SUSFS/releases)** page as a rolling `latest` release:
 
@@ -76,7 +76,7 @@ Releases are published automatically on the **[Releases](https://github.com/bhaz
 
 ---
 
-## 📲 Installation Guide
+## Installation Guide
 
 ### Prerequisites:
 - Unlocked bootloader on Pixel 7 / Pixel 7 Pro (**gs201**).
@@ -100,7 +100,7 @@ Releases are published automatically on the **[Releases](https://github.com/bhaz
 
 ---
 
-## 🛠️ Repository Structure
+## Repository Structure
 
 ```
 .
@@ -119,7 +119,7 @@ Releases are published automatically on the **[Releases](https://github.com/bhaz
 
 ---
 
-## ❤️ Credits & Acknowledgements
+## Credits & Acknowledgements
 
 Special thanks to the developers and open-source projects that make this kernel possible:
 
