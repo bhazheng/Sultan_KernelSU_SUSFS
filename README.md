@@ -1,86 +1,135 @@
-# Wild Kernels for Android
+# Sultan KernelSU + SUSFS for Google Tensor (gs201)
 
-## Your warranty is no longer valid!
+[![Release](https://img.shields.io/github/v/release/bhazheng/Sultan_KernelSU_SUSFS?color=blue&label=Release)](https://github.com/bhazheng/Sultan_KernelSU_SUSFS/releases)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/bhazheng/Sultan_KernelSU_SUSFS/build-kernel-release.yml?branch=main&label=CI%20Build)](https://github.com/bhazheng/Sultan_KernelSU_SUSFS/actions)
+[![Device](https://img.shields.io/badge/Device-Pixel%207%20Series%20(gs201)-informational)](https://github.com/bhazheng/android_kernel_google_tensynos)
+[![Kernel](https://img.shields.io/badge/Kernel-6.1%20(Android%2014)-brightgreen)](https://github.com/bhazheng/android_kernel_google_tensynos/tree/android14-6.1.145)
 
-I am **not responsible** for bricked devices, damaged hardware, or any issues that arise from using this kernel.
-
-**Please** do thorough research and fully understand the features included in this kernel before flashing it!
-
-By flashing this kernel, **YOU** are choosing to make these modifications. If something goes wrong, **do not blame me**!
-
----
-
-### Proceed at your own risk!
+Automated continuous integration and build system for **Sultan Kernel** on Google Tensor devices (**gs201** / Pixel 7 series), featuring **KernelSU-Next**, **SuSFS**, **NoMount**, **BBRv3**, and performance optimizations.
 
 ---
 
-# Kernels:
- 
-[GKI](https://github.com/WildKernels/GKI_KernelSU_SUSFS)  
-[Sultan](https://github.com/WildKernels/Sultan_KernelSU_SUSFS)  
-[OnePlus](https://github.com/WildKernels/OnePlus_KernelSU_SUSFS)  
-[Legacy Pixels](https://github.com/WildKernels/Pixel_KernelSU_SUSFS)  
+## ⚠️ Disclaimer
+
+```
+* Your warranty is now void.
+* I am not responsible for bricked devices, dead SD cards, bootloops, or data loss.
+* Please do research before flashing custom kernels and rooting your device.
+* YOU are choosing to make these modifications at your own risk.
+```
 
 ---
 
-# Other Links:
+## 🌟 Features
 
-[Kernel Patches](https://github.com/WildKernels/kernel_patches)  
-[Old Build Scripts](https://github.com/TheWildJames/kernel_build_scripts)  
-[Horizon Kernel Flasher](https://github.com/libxzr/HorizonKernelFlasher)  
-
----
-
-# Installation instructions: 
-
-Follow the steps for GKI:  
-[Installation](https://kernelsu.org/guide/installation.html)
-
-To get boot.img format:  
-[Get My Kernel Format](https://github.com/TheWildJames/Get_My_Kernel_Format)
-
----
-
-# Features
-
-- **KernelSU**: KernelSU is a root solution for Android GKI devices, it works in kernel mode and grants root permission to userspace applications directly in kernel space.
-- **SUSFS**: An addon root hiding kernel patches and userspace module for KernelSU.
-
----
-
-# Credits
-
-- **KernelSU**: Developed by [tiann](https://github.com/tiann/KernelSU).
-- **KernelSU-Next**: Developed by [rifsxd](https://github.com/KernelSU-Next/KernelSU-Next), dev-susfs fork by [pershoot](https://github.com/pershoot/KernelSU-Next).
-- **SUSFS**: Developed by [simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git), gki-android14-6.1 fork by [pershoot](https://gitlab.com/pershoot/susfs4ksu.git).
-- **SUSFS Module**: Developed by [sidex15](https://github.com/sidex15).
-- **Sultan Kernels**: Developed by [kerneltoast](https://github.com/kerneltoast).
-
-Special thanks to the open-source community for their contributions!
+- **Sultan Kernel (by kerneltoast / bhazheng)**:
+  - Fully integrated monolithic kernel (`CONFIG_INTEGRATE_MODULES=y`) for maximum responsiveness, security, and battery efficiency.
+- **KernelSU-Next (pershoot `dev-susfs`)**:
+  - Native kernel-space root implementation without relying on loadable modules or KPROBES.
+  - Native SuSFS inline hooks enabled.
+- **SuSFS (pershoot `gki-android14-6.1`)**:
+  - Advanced root-hiding subsystem integrated into kernel VFS and namespace calls.
+- **NoMount (by maxsteeel)**:
+  - Transparent in-memory VFS path redirection framework.
+  - Intercepts path resolution dynamically without polluting `/proc/mounts`.
+  - Universal metamodule (`NoMount.zip`) built from source via Zig `0.13.0`.
+- **Networking & BBRv3**:
+  - Backported BBRv3 congestion control set as default.
+  - FQ & CAKE queue disciplines enabled.
+  - Force TCP NoDelay and increased socket memory buffer limits.
+- **Storage & System Optimizations**:
+  - Reduced F2FS write congestion and optimized min fsync blocks.
+  - Optimized `memcmp` and memory operations.
+  - Silenced kernel logspam (system & IRQ CPU logspam).
 
 ---
 
-# Support
+## 📦 Build Variants & Toolchains
 
-If you encounter any issues or need help, feel free to open an issue in this repository or reach out to me.
+The repository supports multiple build configurations:
+
+### Variants:
+1. **`KernelSU-Next`**:
+   - Sultan kernel + KernelSU-Next + SuSFS inline hooks + NoMount + BBRv3.
+2. **`NoRoot`**:
+   - Clean Sultan kernel with all performance/network patches + NoMount + BBRv3 (no root, no KSU/SuSFS hooks).
+
+### Toolchains:
+- **GCC (GNU Compiler Collection 14.2.0)**: Official AArch64 crosstool from kernel.org.
+- **Clang (Neutron Clang 06092026)**: LLVM toolchain with Android GKI standard **ThinLTO** (`CONFIG_LTO_CLANG_THIN`).
 
 ---
 
-# Disclaimer
+## 📥 Releases & Artifacts
 
-Flashing this kernel will void your warranty, and there is always a risk of bricking your device. Please make sure to back up your data and ensure you understand the risks before proceeding.
+Releases are published automatically on the **[Releases](https://github.com/bhazheng/Sultan_KernelSU_SUSFS/releases)** page as a rolling `latest` release:
 
-**Proceed at your own risk!**
+| File | Description |
+|---|---|
+| `KernelSU-Next-gs201-Sultan-gcc.zip` | AnyKernel3 flashable kernel (KSU-Next, GCC 14) |
+| `KernelSU-Next-gs201-Sultan-clang.zip` | AnyKernel3 flashable kernel (KSU-Next, Neutron Clang) |
+| `NoRoot-gs201-Sultan-gcc.zip` | AnyKernel3 flashable kernel (Clean, GCC 14) |
+| `NoRoot-gs201-Sultan-clang.zip` | AnyKernel3 flashable kernel (Clean, Neutron Clang) |
+| `NoMount.zip` | Universal NoMount metamodule (install via Root Manager) |
+| `KernelSU_Next_*.apk` | Official KernelSU-Next companion manager app |
+| `upstream-shas-*.json` | Git commit audit manifest for build reproducibility |
 
 ---
 
-[Telegram](https://t.me/TheWildJames)  
-[Telegram Group](https://t.me/WildKernels)  
+## 📲 Installation Guide
 
-# Special thanks to the following people for their contributions!
-This helps me alot! <3
+### Prerequisites:
+- Unlocked bootloader on Pixel 7 / Pixel 7 Pro (**gs201**).
+- Stock or custom AOSP ROM based on Android 14.
 
-[simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git) - Created SUSFS!  
-[sidex15](https://github.com/sidex15) - Created module!
+### 1. Flashing the Kernel
+1. Download the AnyKernel3 ZIP corresponding to your preferred variant and toolchain from [Releases](https://github.com/bhazheng/Sultan_KernelSU_SUSFS/releases).
+2. Flash the ZIP using one of the following methods:
+   - **[Horizon Kernel Flasher](https://github.com/libxzr/HorizonKernelFlasher)** (Recommended).
+   - **Franco Kernel Manager (FKM)** or **EX Kernel Manager**.
+   - Custom recovery (TWRP) if available.
+3. Reboot your device.
 
-If you have contributed and are not here please remind me!
+### 2. Setting Up Root & Modules (KernelSU-Next variant only)
+1. Install the downloaded `KernelSU_Next_*.apk` manager application.
+2. Open the app to verify root access and SuSFS status.
+3. Install the companion modules:
+   - **SuSFS Module**: Download and flash [ksu_module_susfs](https://github.com/sidex15/ksu_module_susfs).
+   - **NoMount Metamodule**: Flash `NoMount.zip` directly in the manager app.
+4. Reboot your device to activate all protections.
+
+---
+
+## 🛠️ Repository Structure
+
+```
+.
+├── .github/workflows/
+│   ├── build-kernel-release.yml   # Main orchestration workflow (triggers build & release)
+│   ├── sultan-gcc.yml             # GCC 14 build pipeline
+│   └── sultan-clang.yml           # Neutron Clang (ThinLTO) build pipeline
+├── patches/
+│   ├── 00_sultan_kernel_fixes.patch               # Linker, weak symbol, and setlocalversion fixes
+│   ├── 02_ksun_sultan.patch                       # Non-modular patch_memory build hook for KSU
+│   ├── 50_add_susfs_in_gki-android14-6.1-sultan.patch # SuSFS inline hooks for Sultan tree
+│   └── deprecated/
+│       └── next-susfs-fixup.patch                 # Legacy overlay patch (deprecated)
+└── README.md
+```
+
+---
+
+## ❤️ Credits & Acknowledgements
+
+Special thanks to the developers and open-source projects that make this kernel possible:
+
+- **[kerneltoast (Sultan Alsawaf)](https://github.com/kerneltoast)** - Creator of Sultan Kernel.
+- **[bhazheng](https://github.com/bhazheng)** - Maintainer of the gs201 Tensynos kernel tree and patches.
+- **[pershoot](https://github.com/pershoot)** - For the `dev-susfs` fork of KernelSU-Next and `susfs4ksu`.
+- **[tiann](https://github.com/tiann)** & **[rifsxd](https://github.com/KernelSU-Next/KernelSU-Next)** - KernelSU & KernelSU-Next core developers.
+- **[simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git)** - Creator of SuSFS.
+- **[maxsteeel](https://github.com/maxsteeel/nomount)** - Creator of the NoMount framework.
+- **[sidex15](https://github.com/sidex15/ksu_module_susfs)** - Creator of the SuSFS Magisk/KSU module.
+- **[Neutron Toolchains](https://github.com/Neutron-Toolchains)** - High-performance LLVM/Clang builds.
+- **[TheWildJames](https://github.com/TheWildJames)** & **[WildKernels](https://github.com/WildKernels)** - Base build scripts and CI inspirations.
+- **[osm0sis](https://github.com/osm0sis/AnyKernel3)** - AnyKernel3 template and flashing tools.
