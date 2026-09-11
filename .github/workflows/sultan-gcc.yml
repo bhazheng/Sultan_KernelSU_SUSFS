@@ -11,11 +11,6 @@ on:
         required: true
         default: "gs201"
         type: string
-      kernel_version:
-        description: "Kernel version (e.g. 6.1)"
-        required: true
-        default: "6.1"
-        type: string
       variants:
         description: "Varian yang di-build"
         required: false
@@ -28,9 +23,6 @@ on:
   workflow_call:
     inputs:
       codename:
-        required: true
-        type: string
-      kernel_version:
         required: true
         type: string
       variants:
@@ -95,12 +87,13 @@ jobs:
           path: ~/.cache/ccache
           key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-gcc-v1
           restore-keys: |
-            ccache-${{ inputs.codename }}-
+            ccache-${{ inputs.codename }}-${{ matrix.variant }}-gcc-
+            ccache-${{ inputs.codename }}-gcc-
 
       - name: Set up Zig Compiler
         uses: jetsung/setup-zig@v0.0.4
         with:
-          version: master
+          version: 0.13.0
 
       - name: Set CONFIG Environment Variable
         shell: bash
@@ -139,7 +132,9 @@ jobs:
           git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://gitlab.com/pershoot/susfs4ksu.git -b "gki-android14-6.1" susfs4ksu &
 
           # Tunggu semua clone paralel selesai sebelum langkah berikut.
-          wait
+          for pid in $(jobs -p); do
+            wait "$pid"
+          done
 
       - name: Record Upstream SHAs
         shell: bash
@@ -184,6 +179,7 @@ jobs:
           for k, v in shas.items():
               print(f"[+] {k} = {v}")
           EOF
+          cp upstream-shas.json "$GITHUB_WORKSPACE/upstream-shas-${{ matrix.variant }}-gcc.json"
           {
             echo "### Upstream SHAs"
             echo ""
@@ -195,7 +191,7 @@ jobs:
         with:
           name: upstream-shas-${{ inputs.codename }}-${{ matrix.variant }}-gcc
           path: |
-            ${{ github.workspace }}/upstream-shas.json
+            ${{ github.workspace }}/upstream-shas-${{ matrix.variant }}-gcc.json
 
       - name: Add Root Implementation & Version Anchoring
         if: ${{ matrix.variant == 'KernelSU-Next' }}
@@ -223,7 +219,7 @@ jobs:
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
-            git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
+            retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
 
             # Hapus pembatasan depends on KPROBES pada Kconfig KernelSU agar CONFIG_KSU
@@ -594,6 +590,7 @@ jobs:
           fi
 
           # 3. Kompilasi Paralel
+          make $MAKE_ARGS syncconfig
           make $MAKE_ARGS LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
             make $MAKE_ARGS LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs

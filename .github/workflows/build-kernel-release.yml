@@ -33,7 +33,6 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      kernel_version: "6.1"
       variants: ${{ inputs.variants }}
 
   build-kernel-gs201-clang:
@@ -42,7 +41,6 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      kernel_version: "6.1"
       variants: ${{ inputs.variants }}
 
   trigger-release:
@@ -93,7 +91,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "[+] Deleting existing releases to keep only 1 release..."
-          for old_tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName' 2>/dev/null); do
+          for old_tag in $(gh release list --limit 1000 --json tagName --jq '.[].tagName' 2>/dev/null); do
             echo "Deleting release: $old_tag"
             gh release delete "$old_tag" --yes --cleanup-tag 2>/dev/null || true
           done
@@ -122,13 +120,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Loop through all files in the downloaded-artifacts directory
-          for file in ./downloaded-artifacts/*/*; do
-              # Skip non-files
-              if [ ! -f "$file" ]; then
-                  continue
-              fi
-
-              # Upload the file to the GitHub release with --clobber to overwrite duplicate files safely
+          find ./downloaded-artifacts -type f | while IFS= read -r file; do
               echo "Uploading $file..."
               gh release upload "${RELEASE_TAG}" "$file" --clobber
           done
