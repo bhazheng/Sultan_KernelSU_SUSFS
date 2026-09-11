@@ -399,6 +399,8 @@ jobs:
             echo "CONFIG_NETFILTER_XT_SET=y"
             echo "CONFIG_NETFILTER_XT_TARGET_LOG=y"
             echo "CONFIG_NETFILTER_XT_MATCH_RECENT=y"
+            echo "CONFIG_IP6_NF_NAT=y"
+            echo "CONFIG_IP6_NF_TARGET_MASQUERADE=y"
             # Netfilter/Xtables Targets & Matches (GKID compat.config)
             echo "CONFIG_NETFILTER_XT_TARGET_HMARK=y"
             echo "CONFIG_NETFILTER_XT_TARGET_CLASSIFY=y"
