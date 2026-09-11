@@ -33,8 +33,8 @@ Automated continuous integration and build system for **Sultan Kernel** on Googl
   - Transparent in-memory VFS path redirection framework.
   - Intercepts path resolution dynamically without polluting `/proc/mounts`.
   - Universal metamodule (`NoMount.zip`) built from source via Zig `0.13.0`.
-- **Networking & BBR / BBRv3**:
-  - BBR congestion control set as default with BBRv3 available.
+- **Networking & BBR**:
+  - Official in-tree Linux BBR congestion control set as default.
   - FQ & CAKE queue disciplines enabled.
   - IPSet, WireGuard, and TTL/HL targets enabled.
 - **NTSync**:

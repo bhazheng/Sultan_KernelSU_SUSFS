@@ -81,7 +81,7 @@ jobs:
         [+] KernelSU-Next
         [+] SUSFS (Next)
         [+] NoMount (Next / NoRoot)
-        [+] BBR & BBRV3
+        [+] BBR
         [+] NTSync
 
     steps:
