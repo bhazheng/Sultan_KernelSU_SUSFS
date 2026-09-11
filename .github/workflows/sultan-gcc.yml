@@ -309,9 +309,12 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
 
+          # Terapkan patch BBRv3 dari GKID-Kernels (cherry-pick resmi google/bbr)
+          echo "[+] Menerapkan patch BBRv3 dari GKID-Kernels..."
+          patch -p1 -F3 --forward < "$GITHUB_WORKSPACE/patches/bbrv3.patch" || true
+
           REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
           PATCHES=(
-            "bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch"
             "unicode_bypass_fix_6.1%2B.patch"
             "silence_system_logspam.patch"
             "silence_irq_cpu_logspam.patch"
