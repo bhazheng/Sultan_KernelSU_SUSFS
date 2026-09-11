@@ -11,11 +11,6 @@ on:
         required: true
         default: "gs201"
         type: string
-      android_version:
-        description: "Android version (e.g. android14)"
-        required: true
-        default: "android14"
-        type: string
       kernel_version:
         description: "Kernel version (e.g. 6.1)"
         required: true
@@ -33,9 +28,6 @@ on:
   workflow_call:
     inputs:
       codename:
-        required: true
-        type: string
-      android_version:
         required: true
         type: string
       kernel_version:
@@ -123,9 +115,6 @@ jobs:
           set -euo pipefail
           echo "[+] Cloning dependencies in parallel (shallow + partial)..."
           KERNEL_BRANCH="android14-6.1.145"
-          if [ "${{ inputs.android_version }}" = "android16" ]; then
-            KERNEL_BRANCH="16.0.0-sultan"
-          fi
           echo "[+] Target kernel branch: $KERNEL_BRANCH"
 
           clone_kernel() {
