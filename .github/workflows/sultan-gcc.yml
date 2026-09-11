@@ -313,18 +313,11 @@ jobs:
           echo "[+] Menerapkan patch BBRv3 dari GKID-Kernels..."
           patch -p1 -F3 --forward < "$GITHUB_WORKSPACE/patches/bbrv3.patch" || true
 
-          REPO="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common"
-          PATCHES=(
-            "unicode_bypass_fix_6.1%2B.patch"
-            "silence_system_logspam.patch"
-            "silence_irq_cpu_logspam.patch"
-            "ntsync/ntsync_compat_android14-6.1.patch"
-            "ntsync/ntsync_base.patch"
-            "f2fs_reduce_congestion.patch"
-            "f2fs_enlarge_min_fsync_blocks.patch"
-          )
-          for p in "${PATCHES[@]}"; do
-            curl -fsSL --retry 3 "$REPO/$p" | patch -p1 --forward || true
+          # Terapkan patch optimasi sistem non-RAM dari GKID-Kernels
+          echo "[+] Menerapkan patch optimasi dari GKID-Kernels..."
+          for p in "$GITHUB_WORKSPACE"/patches/gkid/*.patch; do
+            echo "Applying $(basename "$p")..."
+            patch -p1 -F3 --forward < "$p" || true
           done
 
       - name: Integrate NoMount
