@@ -500,7 +500,6 @@ jobs:
             echo "CONFIG_WIREGUARD=y"
             echo "CONFIG_TCP_CONG_ADVANCED=y"
             echo "CONFIG_TCP_CONG_BBR=y"
-            echo "CONFIG_TCP_CONG_BBR3=y"
             echo "CONFIG_TCP_CONG_CUBIC=y"
             echo "CONFIG_TCP_CONG_BIC=y"
             echo "CONFIG_TCP_CONG_WESTWOOD=y"
