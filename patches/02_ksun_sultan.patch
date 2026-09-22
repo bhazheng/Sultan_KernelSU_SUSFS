@@ -1,6 +1,6 @@
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
-@@ -19,9 +19,9 @@
+@@ -13,9 +13,9 @@
  # Core utilities ('selinux hide'/hooks)
  ifeq ($(strip $(CONFIG_KPROBES)),y)
  kernelsu-objs += hook/lsm_hook.o
