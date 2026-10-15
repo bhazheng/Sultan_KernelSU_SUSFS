@@ -11,3 +11,10 @@
  endif
  
  # Hooks (excluded for SuSFS)
+@@ -120,6 +120,7 @@ else
+ endif
+ 
+ ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include -I$(KSU_KERNEL_DIR)/..
++subdir-ccflags-y += $(ccflags-y) -I$(srctree)/KernelSU-Next -I$(srctree)/drivers/kernelsu/include -I$(srctree)/drivers/kernelsu
+ 
+ obj-$(CONFIG_KSU) += kernelsu.o

@@ -213,6 +213,7 @@ jobs:
             echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
             retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+            ln -sf ../uapi KernelSU-Next/kernel/uapi
 
             echo "[+] Menerapkan patch KernelSU-Next..."
             patch -p1 -d KernelSU-Next < "$GITHUB_WORKSPACE/patches/02_ksun_sultan.patch" || true
@@ -226,8 +227,13 @@ jobs:
           fi
 
           for kf in KernelSU-Next/kernel/Kbuild KernelSU-Next/kernel/Makefile; do
-            if [ -f "$kf" ] && ! grep -q "Wno-misleading-indentation" "$kf"; then
-              echo "subdir-ccflags-y += -Wno-misleading-indentation" >> "$kf"
+            if [ -f "$kf" ]; then
+              if ! grep -q "Wno-misleading-indentation" "$kf"; then
+                echo "subdir-ccflags-y += -Wno-misleading-indentation" >> "$kf"
+              fi
+              if ! grep -q "subdir-ccflags-y.*KernelSU-Next" "$kf"; then
+                echo "subdir-ccflags-y += -I\$(srctree)/drivers/kernelsu -I\$(srctree)/drivers/kernelsu/include -I\$(srctree)/KernelSU-Next -I\$(srctree)/KernelSU-Next/kernel -I\$(srctree)/KernelSU-Next/kernel/include" >> "$kf"
+              fi
             fi
           done
 

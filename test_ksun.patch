@@ -1,0 +1,20 @@
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -21,9 +21,9 @@ endif
+ # Core utilities ('selinux hide'/hooks)
+ ifeq ($(strip $(CONFIG_KPROBES)),y)
+ kernelsu-objs += hook/lsm_hook.o
++endif
+ ifdef KSU_ARCH
+ kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o
+-endif
+ endif
+ 
+ # Hooks (excluded for SuSFS)
+@@ -118,6 +118,7 @@ else
+ endif
+ 
+ ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include -I$(KSU_KERNEL_DIR)/..
++subdir-ccflags-y += $(ccflags-y) -I$(srctree)/KernelSU-Next -I$(srctree)/drivers/kernelsu/include -I$(srctree)/drivers/kernelsu
+ 
+ obj-$(CONFIG_KSU) += kernelsu.o
