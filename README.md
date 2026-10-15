@@ -77,13 +77,9 @@ Releases are published automatically on the **[Releases](https://github.com/bhaz
 | File | Description |
 |---|---|
 | `KernelSU-Next-gs201-6.12-Sidharthify-clang.zip` | 6.12 AnyKernel3 flashable kernel (KSU-Next, Neutron Clang) |
-| `KernelSU-Next-gs201-6.12-Sidharthify-gcc.zip` | 6.12 AnyKernel3 flashable kernel (KSU-Next, GCC 14) |
 | `NoRoot-gs201-6.12-Sidharthify-clang.zip` | 6.12 AnyKernel3 flashable kernel (Clean, Neutron Clang) |
-| `NoRoot-gs201-6.12-Sidharthify-gcc.zip` | 6.12 AnyKernel3 flashable kernel (Clean, GCC 14) |
 | `KernelSU-Next-gs201-Sultan-clang.zip` | 6.1 AnyKernel3 flashable kernel (KSU-Next, Neutron Clang) |
-| `KernelSU-Next-gs201-Sultan-gcc.zip` | 6.1 AnyKernel3 flashable kernel (KSU-Next, GCC 14) |
 | `NoRoot-gs201-Sultan-clang.zip` | 6.1 AnyKernel3 flashable kernel (Clean, Neutron Clang) |
-| `NoRoot-gs201-Sultan-gcc.zip` | 6.1 AnyKernel3 flashable kernel (Clean, GCC 14) |
 | `NoMount.zip` | Universal NoMount metamodule (install via Root Manager) |
 | `KernelSU_Next_*.apk` | Official KernelSU-Next companion manager app |
 | `upstream-shas-*.json` | Git commit audit manifest for build reproducibility |
@@ -121,9 +117,7 @@ Releases are published automatically on the **[Releases](https://github.com/bhaz
 ├── .github/workflows/
 │   ├── build-kernel-release.yml                       # Unified orchestration workflow (6.12 & 6.1)
 │   ├── sidharthify-clang.yml                          # Sidharthify 6.12 Neutron Clang build pipeline
-│   ├── sidharthify-gcc.yml                            # Sidharthify 6.12 GCC 14 build pipeline
-│   ├── sultan-clang.yml                               # Sultan 6.1 Neutron Clang build pipeline
-│   └── sultan-gcc.yml                                 # Sultan 6.1 GCC 14 build pipeline
+│   └── sultan-clang.yml                               # Sultan 6.1 Neutron Clang build pipeline
 ├── patches/
 │   ├── 00_sultan_kernel_fixes.patch                   # Sultan tree linker, weak symbol, setlocalversion fixes
 │   ├── 02_ksun_sultan.patch                           # Non-modular patch_memory build hook for KSU

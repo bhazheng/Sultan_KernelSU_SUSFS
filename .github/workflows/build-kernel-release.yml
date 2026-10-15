@@ -25,49 +25,22 @@ on:
           - '["KernelSU-Next"]'
           - '["KernelSU-Next", "NoRoot"]'
           - '["NoRoot"]'
-      toolchain:
-        description: "Toolchain yang dipakai"
-        required: false
-        default: "clang"
-        type: choice
-        options:
-          - "clang"
-          - "gcc"
-          - "both"
-
 jobs:
   build-kernel-gs201-612-clang:
-    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.12') && (inputs.toolchain == 'both' || inputs.toolchain == 'clang') }}
+    if: ${{ inputs.kernel_version == 'both' || inputs.kernel_version == '6.12' }}
     uses: ./.github/workflows/sidharthify-clang.yml
     secrets: inherit
     with:
       codename: "gs201"
       variants: ${{ inputs.variants }}
 
-  build-kernel-gs201-612-gcc:
-    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.12') && (inputs.toolchain == 'both' || inputs.toolchain == 'gcc') }}
-    uses: ./.github/workflows/sidharthify-gcc.yml
-    secrets: inherit
-    with:
-      codename: "gs201"
-      variants: ${{ inputs.variants }}
-
-  build-kernel-gs201-61-gcc:
-    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.1') && (inputs.toolchain == 'both' || inputs.toolchain == 'gcc') }}
-    uses: ./.github/workflows/sultan-gcc.yml
-    secrets: inherit
-    with:
-      codename: "gs201"
-      variants: ${{ inputs.variants }}
-
   build-kernel-gs201-61-clang:
-    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.1') && (inputs.toolchain == 'both' || inputs.toolchain == 'clang') }}
+    if: ${{ inputs.kernel_version == 'both' || inputs.kernel_version == '6.1' }}
     uses: ./.github/workflows/sultan-clang.yml
     secrets: inherit
     with:
       codename: "gs201"
       variants: ${{ inputs.variants }}
-
   trigger-release:
     runs-on: ubuntu-latest
     permissions:
@@ -79,9 +52,7 @@ jobs:
       !contains(needs.*.result, 'cancelled')
     needs:
       - build-kernel-gs201-612-clang
-      - build-kernel-gs201-612-gcc
       - build-kernel-gs201-61-clang
-      - build-kernel-gs201-61-gcc
     env:
       GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
