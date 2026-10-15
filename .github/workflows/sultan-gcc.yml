@@ -222,12 +222,6 @@ jobs:
             retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
 
-            # Salin header uapi dan include langsung ke tree KernelSU-Next agar selalu ditemukan di out-of-tree build
-            cp -a KernelSU-Next/uapi KernelSU-Next/kernel/ 2>/dev/null || true
-            cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/compat/ 2>/dev/null || true
-            cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/ 2>/dev/null || true
-            ln -sf ../uapi KernelSU-Next/kernel/uapi 2>/dev/null || true
-
             echo "[+] Menerapkan patch KernelSU-Next untuk kernel Sultan non-modular..."
             patch -p1 -d KernelSU-Next < "$GITHUB_WORKSPACE/patches/02_ksun_sultan.patch"
           fi
@@ -240,15 +234,11 @@ jobs:
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
           fi
 
-          # Matikan warning misleading-indentation di tree KernelSU dan pastikan header uapi/include ditemukan
+          # Matikan warning misleading-indentation di tree KernelSU untuk mencegah
+          # compiler memperlakukannya sebagai fatal error (-Werror)
           for kf in KernelSU-Next/kernel/Kbuild KernelSU-Next/kernel/Makefile; do
-            if [ -f "$kf" ]; then
-              if ! grep -q "Wno-misleading-indentation" "$kf"; then
-                echo "subdir-ccflags-y += -Wno-misleading-indentation" >> "$kf"
-              fi
-              if ! grep -q "subdir-ccflags-y.*KernelSU-Next" "$kf"; then
-                echo "subdir-ccflags-y += -I\$(srctree)/drivers/kernelsu -I\$(srctree)/drivers/kernelsu/include -I\$(srctree)/KernelSU-Next -I\$(srctree)/KernelSU-Next/kernel -I\$(srctree)/KernelSU-Next/kernel/include" >> "$kf"
-              fi
+            if [ -f "$kf" ] && ! grep -q "Wno-misleading-indentation" "$kf"; then
+              echo "subdir-ccflags-y += -Wno-misleading-indentation" >> "$kf"
             fi
           done
 

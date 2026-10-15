@@ -214,9 +214,14 @@ jobs:
             retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
 
-            # Salin header uapi dan include langsung ke tree KernelSU-Next agar selalu ditemukan di out-of-tree build
+            # Salin header uapi dan include langsung ke semua direktori target agar selalu ditemukan di out-of-tree build 6.12
             cp -a KernelSU-Next/uapi KernelSU-Next/kernel/ 2>/dev/null || true
+            cp -a KernelSU-Next/uapi KernelSU-Next/kernel/core/ 2>/dev/null || true
+            cp -a KernelSU-Next/uapi KernelSU-Next/kernel/policy/ 2>/dev/null || true
+            cp -a KernelSU-Next/uapi drivers/ 2>/dev/null || true
             cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/compat/ 2>/dev/null || true
+            cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/core/ 2>/dev/null || true
+            cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/policy/ 2>/dev/null || true
             cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/ 2>/dev/null || true
             ln -sf ../uapi KernelSU-Next/kernel/uapi 2>/dev/null || true
 
@@ -488,7 +493,9 @@ jobs:
           printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-g++" > "$HOME/.ccache-bin/aarch64-linux-g++"
           chmod +x "$HOME/.ccache-bin/aarch64-linux-gcc" "$HOME/.ccache-bin/aarch64-linux-g++"
           export PATH="$HOME/.ccache-bin:$PATH"
-
+          if [ -d "KernelSU-Next" ]; then
+            export KCFLAGS="-I$PWD/drivers/kernelsu -I$PWD/drivers/kernelsu/include -I$PWD/KernelSU-Next -I$PWD/KernelSU-Next/kernel -I$PWD/KernelSU-Next/kernel/include"
+          fi
           MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux- WERROR=0"
 
           rm -f .config
