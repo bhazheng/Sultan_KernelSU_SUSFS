@@ -1,12 +1,21 @@
-name: Build and Release Sultan Kernels
+name: Build and Release GS201 Kernels
 
 permissions:
   contents: write  # Allow writing to repository contents (for pushing tags)
   actions: write   # Allows triggering actions
-  
+
 on:
   workflow_dispatch:
     inputs:
+      kernel_version:
+        description: "Kernel version / source tree to build"
+        required: false
+        default: "6.12"
+        type: choice
+        options:
+          - "6.12"
+          - "6.1"
+          - "both"
       variants:
         description: "Varian yang di-build"
         required: false
@@ -19,24 +28,40 @@ on:
       toolchain:
         description: "Toolchain yang dipakai"
         required: false
-        default: "both"
+        default: "clang"
         type: choice
         options:
-          - "both"
-          - "gcc"
           - "clang"
+          - "gcc"
+          - "both"
 
 jobs:
-  build-kernel-gs201-gcc:
-    if: ${{ inputs.toolchain == 'both' || inputs.toolchain == 'gcc' }}
+  build-kernel-gs201-612-clang:
+    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.12') && (inputs.toolchain == 'both' || inputs.toolchain == 'clang') }}
+    uses: ./.github/workflows/sidharthify-clang.yml
+    secrets: inherit
+    with:
+      codename: "gs201"
+      variants: ${{ inputs.variants }}
+
+  build-kernel-gs201-612-gcc:
+    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.12') && (inputs.toolchain == 'both' || inputs.toolchain == 'gcc') }}
+    uses: ./.github/workflows/sidharthify-gcc.yml
+    secrets: inherit
+    with:
+      codename: "gs201"
+      variants: ${{ inputs.variants }}
+
+  build-kernel-gs201-61-gcc:
+    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.1') && (inputs.toolchain == 'both' || inputs.toolchain == 'gcc') }}
     uses: ./.github/workflows/sultan-gcc.yml
     secrets: inherit
     with:
       codename: "gs201"
       variants: ${{ inputs.variants }}
 
-  build-kernel-gs201-clang:
-    if: ${{ inputs.toolchain == 'both' || inputs.toolchain == 'clang' }}
+  build-kernel-gs201-61-clang:
+    if: ${{ (inputs.kernel_version == 'both' || inputs.kernel_version == '6.1') && (inputs.toolchain == 'both' || inputs.toolchain == 'clang') }}
     uses: ./.github/workflows/sultan-clang.yml
     secrets: inherit
     with:
@@ -53,50 +78,52 @@ jobs:
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled')
     needs:
-      - build-kernel-gs201-gcc
-      - build-kernel-gs201-clang
+      - build-kernel-gs201-612-clang
+      - build-kernel-gs201-612-gcc
+      - build-kernel-gs201-61-clang
+      - build-kernel-gs201-61-gcc
     env:
       GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
       RELEASE_TAG: "latest"
-      RELEASE_NAME: "Sultan Kernels (KernelSU-Next / NoRoot) + SUSFS"
+      RELEASE_NAME: "Google Tensor gs201 Kernels (6.12 & 6.1) + SUSFS + KernelSU-Next"
       RELEASE_NOTES: |
-        This release contains Sultan gs201 kernels in 2 variants (KernelSU-Next & NoRoot) + NoMount metamodule.
+        Automated CI release for Google Tensor gs201 (Pixel 7 / 7 Pro / 7a).
         
         ⚠️ **COMPATIBILITY NOTICE** ⚠️
-        Please ensure compatibility!
+        - **Linux 6.12 (Sidharthify)**: Designed for Android 16 (and 15+ compatible ROMs).
+        - **Linux 6.1 (Sultan)**: Designed for Android 14 / 15.
         
-        Variants:
-        -> KernelSU-Next + SUSFS (inline hook)
-        -> NoRoot (clean Sultan, no root)
+        **Kernel Trees:**
+        - 6.12: https://github.com/sidharthify/android_kernel_google_gs201 (branch 6.12-test)
+        - 6.1: https://github.com/bhazheng/android_kernel_google_tensynos (branch android14-6.1.145)
         
-        Module: 
-        -> https://github.com/sidex15/ksu_module_susfs
-        -> NoMount metamodule (attached; for all variants)
+        **Variants:**
+        - `KernelSU-Next`: Root enabled with SuSFS v2.3.0 inline hooks + NoMount metamodule.
+        - `NoRoot`: Clean performance kernel with NoMount + BBR/BBRv3 (no root).
         
-        Managers & Tooling:
-        -> https://github.com/pershoot/KernelSU-Next (Next)
+        **Modules & Tooling:**
+        - SuSFS Module: https://github.com/sidex15/ksu_module_susfs
+        - NoMount Metamodule: attached `NoMount.zip` (universal)
+        - Manager: https://github.com/KernelSU-Next/KernelSU-Next
         
-        Features:
-        [+] KernelSU-Next
-        [+] SUSFS (Next)
-        [+] NoMount (Next / NoRoot)
-        [+] BBR & BBRV3
-        [+] NTSync
+        **Features Included:**
+        [+] KernelSU-Next (pershoot dev-susfs)
+        [+] SuSFS v2.3.0 Inline Hooks
+        [+] NoMount VFS Redirection Framework
+        [+] BBR / BBRv3 TCP Congestion Control (FQ/CAKE)
+        [+] NTSync (Wine/Proton gaming synchronization)
+        [+] Advanced IPSet, WireGuard & Firewall Netfilter extensions
 
     steps:
-      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
-
-      # Download Artifacts
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./downloaded-artifacts
 
-      # Flatten and Prepare Release Assets
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets
@@ -104,7 +131,6 @@ jobs:
           echo "Files prepared for release:"
           ls -la release-assets/
 
-      # Publish to GitHub Releases (Using softprops/action-gh-release@v2 like in talenta)
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:

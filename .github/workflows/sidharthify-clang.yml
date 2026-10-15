@@ -1,0 +1,783 @@
+name: Sidharthify (Clang)
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      codename:
+        description: "Device codename (e.g. gs201)"
+        required: true
+        default: "gs201"
+        type: string
+      variants:
+        description: "Varian yang di-build"
+        required: false
+        default: '["KernelSU-Next"]'
+        type: choice
+        options:
+          - '["KernelSU-Next"]'
+          - '["KernelSU-Next", "NoRoot"]'
+          - '["NoRoot"]'
+  workflow_call:
+    inputs:
+      codename:
+        required: true
+        type: string
+      variants:
+        description: "Varian yang di-build (JSON array)"
+        required: false
+        type: string
+        default: '["KernelSU-Next"]'
+
+jobs:
+  build-kernel-sidharthify-kernelsu-susfs:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.variants) }}
+
+    steps:
+      - name: Validate Inputs
+        shell: bash
+        run: |
+          # Validasi awal: tree kernel sidharthify untuk gs201
+          case "${{ inputs.codename }}" in
+            gs201)
+              echo "[+] Codename gs201 valid (tree sidharthify gs201-only)."
+              ;;
+            *)
+              echo "::error::Codename '${{ inputs.codename }}' tidak didukung! Tree kernel sidharthify hanya untuk gs201."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space on Runner
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift
+          sudo docker image prune --all --force
+          echo "[+] Disk space cleaned up"
+
+      - name: Install Essential Build Tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd
+
+      - name: Download and extract Neutron Clang (06092026)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Fetching Neutron Clang 06092026 (Neutron-Toolchains/clang-build-catalogue)..."
+          mkdir -p $GITHUB_WORKSPACE/clang
+          CLANG_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/06092026/neutron-clang-06092026.tar.zst"
+          for i in 1 2 3; do
+            echo "Attempt $i: $CLANG_URL"
+            HTTP_CODE="$(curl -sSL -o /tmp/clang.tar.zst -w "%{http_code}" "$CLANG_URL" || true)"
+            echo "HTTP code: $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ] && [ -s /tmp/clang.tar.zst ]; then
+              if head -c 4 /tmp/clang.tar.zst | od -An -tx1 | grep -qi "28 b5 2f fd"; then
+                if tar -I zstd -tf /tmp/clang.tar.zst >/dev/null 2>&1; then
+                  tar -I zstd -xf /tmp/clang.tar.zst -C $GITHUB_WORKSPACE/clang
+                  rm -f /tmp/clang.tar.zst
+                  echo "[+] Neutron Clang extracted successfully"
+                  break
+                else
+                  echo "Arsip zst rusak, retry..." >&2
+                fi
+              else
+                echo "File bukan zstd valid (awal):" >&2
+                head -c 200 /tmp/clang.tar.zst >&2 || true
+              fi
+            else
+              echo "retry $i failed (http=$HTTP_CODE)" >&2
+            fi
+            rm -f /tmp/clang.tar.zst
+            sleep 5
+            if [ "$i" -eq 3 ]; then
+              echo "::error::Failed to download Neutron Clang after 3 attempts"
+              exit 1
+            fi
+          done
+          chmod +x $GITHUB_WORKSPACE/clang/bin/* 2>/dev/null || true
+          $GITHUB_WORKSPACE/clang/bin/clang --version
+          $GITHUB_WORKSPACE/clang/bin/ld.lld --version
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-v1
+          restore-keys: |
+            ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-
+            ccache-${{ inputs.codename }}-sidharthify-6.12-clang-
+
+      - name: Set up Zig Compiler
+        uses: jetsung/setup-zig@v0.0.4
+        with:
+          version: 0.13.0
+
+      - name: Set CONFIG Environment Variable
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFIG="android_kernel_google_gs201"
+          echo "CONFIG=$CONFIG" >> "$GITHUB_ENV"
+
+      - name: Clone AnyKernel3 and Dependencies (Parallel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "[+] Cloning dependencies in parallel (shallow + partial)..."
+          KERNEL_BRANCH="6.12-test"
+          if git ls-remote --exit-code --heads https://github.com/sidharthify/android_kernel_google_gs201 6.12 >/dev/null 2>&1; then
+            KERNEL_BRANCH="6.12"
+          fi
+          echo "[+] Target kernel branch: $KERNEL_BRANCH (Sidharthify 6.12)"
+
+          clone_kernel() {
+            local n=0
+            until [ "$n" -ge 2 ]; do
+              if git -c protocol.version=2 clone --depth=1 --single-branch --no-tags --filter=blob:none https://github.com/sidharthify/android_kernel_google_gs201 -b "$KERNEL_BRANCH" android_kernel_google_gs201; then
+                return 0
+              fi
+              n=$((n+1))
+              echo "retry $n/2 partial clone kernel gagal, membersihkan..." >&2
+              rm -rf android_kernel_google_gs201
+              sleep 5
+            done
+            echo "[*] Partial clone ditolak server — fallback ke shallow penuh." >&2
+            git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/sidharthify/android_kernel_google_gs201 -b "$KERNEL_BRANCH" android_kernel_google_gs201
+          }
+          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" AnyKernel3 &
+
+          clone_kernel &
+
+          # SuSFS upstream dari simonpunk (branch gki-android16-6.12)
+          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-android16-6.12" susfs4ksu &
+
+          for pid in $(jobs -p); do
+            wait "$pid"
+          done
+
+      - name: Record Upstream SHAs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - << 'EOF'
+          import json, os, subprocess
+
+          def ls_remote(url, ref):
+              try:
+                  out = subprocess.run(
+                      ["git", "ls-remote", url, ref],
+                      capture_output=True, text=True, timeout=60, check=True,
+                  ).stdout.strip()
+                  return out.split()[0] if out else "unknown"
+              except Exception as e:
+                  print(f"::warning::ls-remote gagal untuk {url} {ref}: {e}")
+                  return "unknown"
+
+          def local_head(path):
+              try:
+                  out = subprocess.run(
+                      ["git", "-C", path, "rev-parse", "HEAD"],
+                      capture_output=True, text=True, timeout=30, check=True,
+                  ).stdout.strip()
+                  return out if out else "unknown"
+              except Exception as e:
+                  print(f"::warning::rev-parse gagal untuk {path}: {e}")
+                  return "unknown"
+
+          config = os.environ.get("CONFIG", "android_kernel_google_gs201")
+          shas = {
+              "kernel_tree_sidharthify_6.12": local_head(config),
+              "KernelSU-Next_pershoot": ls_remote("https://github.com/pershoot/KernelSU-Next.git", "refs/heads/dev-susfs"),
+              "susfs4ksu_simonpunk_6.12": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/gki-android16-6.12"),
+              "nomount_dev": ls_remote("https://github.com/maxsteeel/nomount.git", "refs/heads/dev"),
+          }
+          with open("upstream-shas.json", "w") as f:
+              json.dump(shas, f, indent=2)
+          for k, v in shas.items():
+              print(f"[+] {k} = {v}")
+          EOF
+          cp upstream-shas.json "$GITHUB_WORKSPACE/upstream-shas-${{ matrix.variant }}-6.12-clang.json"
+          {
+            echo "### Upstream SHAs (6.12 Sidharthify)"
+            echo ""
+            python3 -c "import json; [print('- ' + k + ': ' + v) for k, v in json.load(open('upstream-shas.json')).items()]"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Upstream SHAs
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-shas-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
+          path: |
+            ${{ github.workspace }}/upstream-shas-${{ matrix.variant }}-6.12-clang.json
+
+      - name: Add Root Implementation & Version Anchoring
+        if: ${{ matrix.variant == 'KernelSU-Next' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+
+          rm -rf KernelSU KernelSU-Next drivers/kernelsu drivers/KernelSU
+          sed -i '/kernelsu/d' drivers/Makefile 2>/dev/null || true
+          sed -i '/kernelsu/d' drivers/Kconfig 2>/dev/null || true
+
+          retry() {
+            local n=0
+            until [ "$n" -ge 5 ]; do
+              "$@" && return 0
+              n=$((n+1))
+              echo "retry $n/5 failed for: $*" >&2
+              sleep 5
+            done
+            return 1
+          }
+
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
+            retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
+            ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+
+            echo "[+] Menerapkan patch KernelSU-Next hook build..."
+            patch -p1 -d KernelSU-Next < "$GITHUB_WORKSPACE/patches/02_ksun_sultan.patch" || true
+          fi
+
+          if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
+            sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+          if ! grep -q 'kernelsu' drivers/Makefile; then
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          fi
+
+          for kf in KernelSU-Next/kernel/Kbuild KernelSU-Next/kernel/Makefile; do
+            if [ -f "$kf" ] && ! grep -q "Wno-misleading-indentation" "$kf"; then
+              echo "subdir-ccflags-y += -Wno-misleading-indentation" >> "$kf"
+            fi
+          done
+
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || {
+            echo "::error::Gagal mendaftarkan drivers/kernelsu/Kconfig ke drivers/Kconfig!"
+            exit 1
+          }
+          test -e drivers/kernelsu
+          test -f drivers/kernelsu/Kconfig || {
+            echo "::error::File drivers/kernelsu/Kconfig tidak ditemukan!"
+            exit 1
+          }
+
+      - name: Apply SUSFS Patches
+        if: ${{ matrix.variant == 'KernelSU-Next' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+
+          SUSFS_DIR="../susfs4ksu/kernel_patches"
+          KSUN_DIR="KernelSU-Next"
+
+          # SUSFS Common (libs)
+          cp "$SUSFS_DIR/fs/"* ./fs/
+          cp "$SUSFS_DIR/include/linux/"* ./include/linux/
+
+          SIDHARTHIFY_PATCH="$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android16-6.12-sidharthify.patch"
+          if [ -f "$SIDHARTHIFY_PATCH" ]; then
+            echo "[+] Menerapkan patch SuSFS adaptasi Sidharthify 6.12..."
+            patch -p1 < "$SIDHARTHIFY_PATCH" || {
+              echo "::error::Patch SuSFS adaptasi Sidharthify 6.12 gagal diterapkan!"
+              exit 1
+            }
+          else
+            echo "[-] Patch lokal tidak ditemukan, fallback ke upstream gki-android16-6.12..."
+            patch -p1 < "$SUSFS_DIR/50_add_susfs_in_gki-android16-6.12.patch" || {
+              echo "::error::Patch SuSFS upstream gagal diterapkan!"
+              exit 1
+            }
+          fi
+
+          echo "=== Pemeriksaan file .rej ==="
+          REJ_COUNT=$(find . -name "*.rej" | wc -l)
+          if [ "$REJ_COUNT" -gt 0 ]; then
+            echo "::error::Ditemukan $REJ_COUNT file .rej pasca-patch SuSFS!"
+            find . -name "*.rej" -print
+            exit 1
+          fi
+
+          echo "=== Verifikasi konsistensi patch SUSFS/KSU ==="
+          if ! grep -rq "susfs_init" "$KSUN_DIR/kernel/" 2>/dev/null; then
+            echo "::error::susfs_init tidak ditemukan di $KSUN_DIR/kernel/ — wiring SUSFS hilang."
+            exit 1
+          fi
+          echo "[+] Konsistensi patch SUSFS/KSU OK (pershoot dev-susfs native)."
+
+      - name: Integrate NoMount
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+          KERNEL_DIR="$(pwd)"
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s dev
+          actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
+          [ ! -L "$KERNEL_DIR/fs/nomount" ] && exit 1
+          echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
+
+      - name: Build and Package NoMount Metamodule
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          COMMIT_HASH="${NOMOUNT_COMMIT:-$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)}"
+          SRC_DIR="nomount_src"
+          MOD_DIR="nomount_mod"
+          ZIP_OUT="NoMount.zip"
+
+          rm -rf "$SRC_DIR" "$MOD_DIR"
+          git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
+          git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
+
+          mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin"
+          (
+            cd "$SRC_DIR/userspace/src"
+            zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -Wl,--entry=_start nm.c -o ../../bin/nm-arm64
+            zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--entry=_start nm.c -o ../../bin/nm-arm
+          )
+          cp -a "$SRC_DIR/module/." "$MOD_DIR/"
+          install -m 0755 "$SRC_DIR/bin/nm-arm64" "$MOD_DIR/bin/nm-arm64"
+          install -m 0755 "$SRC_DIR/bin/nm-arm" "$MOD_DIR/bin/nm-arm"
+          sed -i "s/^versionCode=.*/versionCode=1/" "$MOD_DIR/module.prop"
+          printf '%s\n' "$COMMIT_HASH" > "$MOD_DIR/NOMOUNT_SOURCE_COMMIT"
+          (cd "$MOD_DIR" && zip -qr9 "../$ZIP_OUT" .)
+          sha256sum "$ZIP_OUT" > "${ZIP_OUT}.sha256"
+          rm -rf "$SRC_DIR" "$MOD_DIR"
+
+      - name: Apply Kernel Defconfig Flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+
+          DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
+
+          # ThinLTO standar GKI
+          sed -i 's/CONFIG_LTO_NONE=y/# CONFIG_LTO_NONE is not set/' "$DEFCONFIG" 2>/dev/null || true
+          sed -i 's/CONFIG_LTO_GCC=y/# CONFIG_LTO_GCC is not set/' "$DEFCONFIG" 2>/dev/null || true
+          {
+            echo "CONFIG_LTO_CLANG_THIN=y"
+            echo "CONFIG_TMPFS_XATTR=y"
+            echo "CONFIG_TMPFS_POSIX_ACL=y"
+            echo "CONFIG_IP_NF_TARGET_TTL=y"
+            echo "CONFIG_IP6_NF_TARGET_HL=y"
+            echo "CONFIG_IP6_NF_MATCH_HL=y"
+            echo "CONFIG_NET_ACT_CONNMARK=y"
+            echo "CONFIG_IP_SET=y"
+            echo "CONFIG_IP_SET_MAX=65534"
+            echo "CONFIG_IP_SET_BITMAP_IP=y"
+            echo "CONFIG_IP_SET_BITMAP_IPMAC=y"
+            echo "CONFIG_IP_SET_BITMAP_PORT=y"
+            echo "CONFIG_IP_SET_HASH_IP=y"
+            echo "CONFIG_IP_SET_HASH_IPMARK=y"
+            echo "CONFIG_IP_SET_HASH_IPPORT=y"
+            echo "CONFIG_IP_SET_HASH_IPPORTIP=y"
+            echo "CONFIG_IP_SET_HASH_IPPORTNET=y"
+            echo "CONFIG_IP_SET_HASH_IPMAC=y"
+            echo "CONFIG_IP_SET_HASH_MAC=y"
+            echo "CONFIG_IP_SET_HASH_NETPORTNET=y"
+            echo "CONFIG_IP_SET_HASH_NET=y"
+            echo "CONFIG_IP_SET_HASH_NETNET=y"
+            echo "CONFIG_IP_SET_HASH_NETPORT=y"
+            echo "CONFIG_IP_SET_HASH_NETIFACE=y"
+            echo "CONFIG_IP_SET_LIST_SET=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y"
+            echo "CONFIG_NETFILTER_XT_SET=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_LOG=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_RECENT=y"
+            echo "CONFIG_IP6_NF_NAT=y"
+            echo "CONFIG_IP6_NF_TARGET_MASQUERADE=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_HMARK=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_CLASSIFY=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_CONNSECMARK=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_DSCP=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_IDLETIMER=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_MARK=y"
+            echo "CONFIG_NETFILTER_XT_TARGET_NFLOG=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_ECN=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_HL=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_LENGTH=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_LIMIT=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_MAC=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_MARK=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_POLICY=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_PKTTYPE=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_QUOTA=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_SOCKET=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_STATE=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_STATISTIC=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_STRING=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_TCPMSS=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_TIME=y"
+            echo "CONFIG_NETFILTER_XT_MATCH_U32=y"
+            echo "CONFIG_NET_CLS_BASIC=y"
+            echo "CONFIG_NET_CLS_FW=y"
+            echo "CONFIG_NET_CLS_U32=y"
+            echo "CONFIG_NET_CLS_FLOW=y"
+            echo "CONFIG_NET_CLS_BPF=y"
+            echo "CONFIG_NET_EMATCH=y"
+            echo "CONFIG_NET_EMATCH_CMP=y"
+            echo "CONFIG_NET_EMATCH_NBYTE=y"
+            echo "CONFIG_NET_EMATCH_U32=y"
+            echo "CONFIG_NET_EMATCH_META=y"
+            echo "CONFIG_NET_EMATCH_TEXT=y"
+            echo "CONFIG_IP_NF_TARGET_REDIRECT=y"
+            echo "CONFIG_IP_NF_MANGLE=y"
+            echo "CONFIG_IP_NF_RAW=y"
+            echo "CONFIG_IP_NF_SECURITY=y"
+            echo "CONFIG_IP_NF_ARPTABLES=y"
+            echo "CONFIG_NET_IPVTI=y"
+            echo "CONFIG_INET_ESP=y"
+            echo "CONFIG_IPV6_ROUTER_PREF=y"
+            echo "CONFIG_IPV6_ROUTE_INFO=y"
+            echo "CONFIG_IPV6_OPTIMISTIC_DAD=y"
+            echo "CONFIG_IPV6_MULTIPLE_TABLES=y"
+            echo "CONFIG_IPV6_SUBTREES=y"
+            echo "CONFIG_IPV6_MROUTE=y"
+            echo "CONFIG_IPV6_MROUTE_MULTIPLE_TABLES=y"
+            echo "CONFIG_IPV6_PIMSM_V2=y"
+            echo "CONFIG_INET_UDP_DIAG=y"
+            echo "CONFIG_INET_DIAG_DESTROY=y"
+            echo "CONFIG_WIREGUARD=y"
+            echo "CONFIG_TCP_CONG_ADVANCED=y"
+            echo "CONFIG_TCP_CONG_BBR=y"
+            echo "CONFIG_DEFAULT_BBR=y"
+            echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\""
+            echo "CONFIG_NET_SCH_FQ=y"
+            echo "CONFIG_NET_SCH_FQ_CODEL=y"
+            echo "CONFIG_NET_SCH_CAKE=y"
+            echo "CONFIG_NETWORK_FILESYSTEMS=y"
+            echo "CONFIG_NETFS_SUPPORT=y"
+            echo "CONFIG_KEYS=y"
+            echo "CONFIG_CIFS=y"
+            echo "CONFIG_CIFS_XATTR=y"
+            echo "CONFIG_CIFS_POSIX=y"
+            echo "CONFIG_NTSYNC=y"
+            echo "CONFIG_THREAD_INFO_IN_TASK=y"
+            echo "CONFIG_DEBUG_KERNEL=y"
+            echo "CONFIG_KALLSYMS=y"
+            echo "CONFIG_KALLSYMS_ALL=y"
+            echo "CONFIG_OVERLAY_FS=y"
+            echo "CONFIG_FUSE_FS=y"
+            echo "CONFIG_BPF_SYSCALL=y"
+            echo "CONFIG_FUSE_BPF=y"
+            echo "CONFIG_NOMOUNT=y"
+          } >> "$DEFCONFIG"
+
+          # Matikan CONFIG_RUST agar binder C bawaan digunakan tanpa mewajibkan Android rust toolchain
+          sed -i 's/CONFIG_RUST=y/# CONFIG_RUST is not set/' "$DEFCONFIG" 2>/dev/null || true
+          sed -i 's/CONFIG_ANDROID_BINDER_IPC_RUST=m/# CONFIG_ANDROID_BINDER_IPC_RUST is not set/' "$DEFCONFIG" 2>/dev/null || true
+
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            {
+              echo "CONFIG_KSU=y"
+              echo "CONFIG_KSU_SUSFS_SUS_SU=n"
+              echo "CONFIG_KSU_SUSFS=y"
+            } >> "$DEFCONFIG"
+          else
+            echo "[*] Varian ${{ matrix.variant }} — injeksi KSU/SUSFS dilewati (tanpa KSU)."
+          fi
+
+          sed -i "s/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"-android16-6-syd-${{ matrix.variant }}\"/" "$DEFCONFIG"
+          sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' "$DEFCONFIG" 2>/dev/null || true
+
+      - name: Build the Kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          unset CLANG_FLAGS
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          if [ -d "$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin" ]; then
+            export PATH="$GITHUB_WORKSPACE/clang/aarch64-linux-gnu/bin:$PATH"
+          fi
+
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          export CCACHE_MAXSIZE=2G
+          mkdir -p "$HOME/.ccache-bin"
+          printf '#!/bin/sh\nexec ccache "%s" -Qunused-arguments "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang" > "$HOME/.ccache-bin/clang"
+          printf '#!/bin/sh\nexec ccache "%s" -Qunused-arguments "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang++" > "$HOME/.ccache-bin/clang++"
+          chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
+          export PATH="$HOME/.ccache-bin:$PATH"
+          export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
+
+          rm -f .config
+
+          # 1. Defconfig dasar
+          make $MAKE_ARGS -j$(nproc --all) ${{ inputs.codename }}_defconfig
+
+          CONFIG_FILE="out/.config"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            CONFIG_FILE=".config"
+          fi
+
+          # 2. Injeksi mutlak konfigurasi ke target config aktif
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            ./scripts/config --file "$CONFIG_FILE" \
+              -e CONFIG_KSU \
+              -e CONFIG_KSU_SUSFS \
+              -d CONFIG_KSU_SUSFS_SUS_SU
+          else
+            echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_KSU dilewati."
+          fi
+          ./scripts/config --file "$CONFIG_FILE" \
+            -d CONFIG_WERROR \
+            -d CONFIG_LTO_GCC \
+            -d CONFIG_LTO_NONE \
+            -e CONFIG_LTO_CLANG_THIN \
+            -d CONFIG_RUST \
+            -d CONFIG_ANDROID_BINDER_IPC_RUST \
+            -e CONFIG_ANDROID_BINDER_IPC \
+            -e CONFIG_NTSYNC \
+            -e CONFIG_NOMOUNT \
+            -e CONFIG_THREAD_INFO_IN_TASK \
+            -e CONFIG_DEBUG_KERNEL \
+            -e CONFIG_KALLSYMS \
+            -e CONFIG_KALLSYMS_ALL \
+            -e CONFIG_OVERLAY_FS \
+            -e CONFIG_FUSE_FS \
+            -e CONFIG_BPF_SYSCALL \
+            -e CONFIG_FUSE_BPF
+
+          echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
+          grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
+
+          if [ "$CONFIG_FILE" != ".config" ]; then
+            rm -f .config
+          fi
+
+          make $MAKE_ARGS olddefconfig 2>&1 | tee /tmp/olddefconfig.log
+
+          echo "=== CONFIG_KSU (& status KPROBES/MODULES) setelah olddefconfig ==="
+          grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
+
+          grep -q "^CONFIG_LTO_CLANG_THIN=y" "$CONFIG_FILE" || {
+            echo "::warning::CONFIG_LTO_CLANG_THIN tidak aktif setelah olddefconfig, memeriksa status LTO..."
+            grep "CONFIG_LTO" "$CONFIG_FILE" || true
+          }
+
+          echo "========== Cek CONFIG_KSU setelah olddefconfig =========="
+          MISSING=0
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            if ! grep -q "^CONFIG_KSU=y" "$CONFIG_FILE"; then
+              echo "::error::CONFIG_KSU tidak aktif setelah olddefconfig!"
+              MISSING=1
+            fi
+            if ! grep -q "^CONFIG_KSU_SUSFS=y" "$CONFIG_FILE"; then
+              echo "::error::CONFIG_KSU_SUSFS tidak aktif setelah olddefconfig!"
+              MISSING=1
+            fi
+          else
+            echo "::notice::Varian ${{ matrix.variant }} — pemeriksaan CONFIG_KSU dilewati (tanpa root)."
+          fi
+          if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
+            echo "::warning::CONFIG_KALLSYMS_ALL tidak aktif, menginjeksi langsung ke $CONFIG_FILE..."
+            ./scripts/config --file "$CONFIG_FILE" -e CONFIG_DEBUG_KERNEL -e CONFIG_KALLSYMS -e CONFIG_KALLSYMS_ALL
+            make $MAKE_ARGS olddefconfig
+          fi
+          if [ $MISSING -eq 1 ]; then
+            grep -i "ksu" /tmp/olddefconfig.log || true
+            exit 1
+          fi
+
+          make $MAKE_ARGS syncconfig
+
+          # 3. Kompilasi Paralel
+          make $MAKE_ARGS LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
+            echo "::error::Build paralel gagal. Melacak via single-thread:"
+            make $MAKE_ARGS LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
+            exit 1
+          }
+
+          ccache -s || true
+
+      - name: Copy Images & Create ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CONFIG"
+          if [ -f ./out/arch/arm64/boot/Image.lz4 ]; then
+            cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
+          elif [ -f ./out/arch/arm64/boot/Image ]; then
+            lz4 -9 -f ./out/arch/arm64/boot/Image ../AnyKernel3/Image.lz4
+          elif [ -f ./arch/arm64/boot/Image.lz4 ]; then
+            cp ./arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
+          elif [ -f ./arch/arm64/boot/Image ]; then
+            lz4 -9 -f ./arch/arm64/boot/Image ../AnyKernel3/Image.lz4
+          fi
+
+          DTB_FOUND=0
+          for dtb_dir in "./google-modules/soc/gs/arch/arm64/boot/dts/google" "./out/google-modules/soc/gs/arch/arm64/boot/dts/google" "./out/google-devices/${{ inputs.codename }}/dts" "./out/arch/arm64/boot/dts" "./google-devices/${{ inputs.codename }}/dts" "./arch/arm64/boot/dts/google-devices/${{ inputs.codename }}/dts" "./arch/arm64/boot/dts"; do
+            if compgen -G "${dtb_dir}/*.dtb" > /dev/null; then
+              cat ${dtb_dir}/*.dtb > ../AnyKernel3/dtb
+              DTB_FOUND=1
+              break
+            fi
+          done
+          if [ $DTB_FOUND -eq 0 ]; then
+            find . -name "*.dtb" -exec cat {} + > ../AnyKernel3/dtb 2>/dev/null || true
+          fi
+
+          if [ ! -f ../AnyKernel3/Image.lz4 ]; then
+            echo "::error::Image.lz4 tidak ditemukan!"
+            exit 1
+          fi
+          if [ ! -s ../AnyKernel3/dtb ]; then
+            echo "::error::dtb tidak ditemukan atau kosong!"
+            exit 1
+          fi
+
+          # Sesuaikan anykernel.sh untuk 6.12 Sidharthify
+          sed -i 's/supported.versions=.*/supported.versions=14 - 16/' ../AnyKernel3/anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=Sidharthify 6.12 Kernel for Pixel 7 Series (gs201)/' ../AnyKernel3/anykernel.sh
+
+          cd ../AnyKernel3
+          ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-6.12-Sidharthify-clang.zip"
+          zip -qr9 "../$ZIP_NAME" . -x '.git/*' -x '.github/*' -x '*.zip' -x 'README.md'
+          cd ..
+          sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "ZIP_SHA=$(cat ${ZIP_NAME}.sha256 | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Generate Workflow Summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          cat << EOF >> "$GITHUB_STEP_SUMMARY"
+          ### 🚀 Build Summary: ${{ inputs.codename }} 6.12 (${{ matrix.variant }}) [Clang]
+          | Komponen | Status / Nilai |
+          |---|---|
+          | **Kernel Version** | `Linux 6.12 (Sidharthify)` |
+          | **Compiler** | `Neutron Clang 06092026` |
+          | **Variant** | `${{ matrix.variant }}` |
+          | **Artifact Name** | `${{ env.ZIP_NAME }}` |
+          | **SHA-256** | \`${{ env.ZIP_SHA }}\` |
+          EOF
+
+      - name: Fetch Manager APK
+        if: ${{ matrix.variant == 'KernelSU-Next' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          python3 - << 'EOF'
+          import os, json, urllib.request
+
+          token = os.environ.get("GH_TOKEN", "")
+          headers = {"User-Agent": "Mozilla/5.0"}
+          if token:
+              headers["Authorization"] = f"token {token}"
+
+          repo = "KernelSU-Next/KernelSU-Next"
+
+          try:
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=1", headers=headers)
+              with urllib.request.urlopen(req, timeout=15) as resp:
+                  releases = json.loads(resp.read().decode("utf-8"))
+              if releases:
+                  assets = releases[0].get("assets", [])
+                  apks = [a for a in assets if a["name"].endswith(".apk")]
+                  for a in apks:
+                      print(f"[+] Downloading {a['name']} from {repo}...")
+                      try:
+                          req_apk = urllib.request.Request(a["browser_download_url"], headers={"User-Agent": "Mozilla/5.0"})
+                          with urllib.request.urlopen(req_apk, timeout=30) as resp_apk, open(a["name"], "wb") as f_out:
+                              f_out.write(resp_apk.read())
+                      except Exception as dl_err:
+                          print(f"[!] Warning: Gagal mengunduh {a['name']}: {dl_err}")
+          except Exception as e:
+              print(f"[!] Warning: Failed to query {repo}: {e}")
+          EOF
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
+          path: |
+            ${{ github.workspace }}/*.zip
+            ${{ github.workspace }}/*.sha256
+            !${{ github.workspace }}/*.apk
+            !${{ github.workspace }}/NoMount*.zip
+            !${{ github.workspace }}/NoMount*.sha256
+
+      - name: Upload NoMount Metamodule Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoMount-Metamodule-6.12-clang
+          path: |
+            ${{ github.workspace }}/NoMount*.zip
+            ${{ github.workspace }}/NoMount*.sha256
+          overwrite: true
+
+      - name: Upload Manager APK Artifact
+        if: ${{ matrix.variant == 'KernelSU-Next' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Manager-APK-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
+          path: |
+            ${{ github.workspace }}/*.apk
+          if-no-files-found: warn
+
+      - name: Collect .rej files
+        if: ${{ always() }}
+        id: collect_rej
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          rm -rf rej
+          mkdir -p rej
+          found="false"
+          while IFS= read -r -d '' rej_file; do
+            found="true"
+            original_file="${rej_file%.rej}"
+            rej_rel="${rej_file#./}"
+            original_rel="${original_file#./}"
+            mkdir -p "rej/$(dirname "$rej_rel")"
+            cp -f "$rej_file" "rej/$rej_rel"
+            if [[ -f "$original_file" ]]; then
+              mkdir -p "rej/$(dirname "$original_rel")"
+              cp -f "$original_file" "rej/$original_rel"
+            fi
+          done < <(find . -type f -name '*.rej' -print0)
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Zip collected .rej bundle
+        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          zip -r "rej-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang.zip" rej
+
+      - name: Upload .rej bundle
+        if: ${{ always() && steps.collect_rej.outputs.found == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rej-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
+          path: |
+            rej-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang*.zip
