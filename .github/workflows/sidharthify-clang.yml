@@ -247,6 +247,11 @@ jobs:
             echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
             retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+            # Fix Linux 6.12 header cleanup: sertakan <linux/pid.h> untuk task_pid_nr
+            sed -i '1i#include <linux/pid.h>' KernelSU-Next/kernel/compat/samsung_kdp.c 2>/dev/null || true
+            sed -i '1i#include <linux/pid.h>' KernelSU-Next/kernel/sulog/event.c 2>/dev/null || true
+            sed -i '1i#include <linux/pid.h>' KernelSU-Next/kernel/include/ksu_samsung_kdp.h 2>/dev/null || true
+            sed -i '1i#include <linux/pid.h>' KernelSU-Next/kernel/include/klog.h 2>/dev/null || true
 
             # Salin header uapi dan include langsung ke semua direktori target agar selalu ditemukan di out-of-tree build 6.12
             cp -a KernelSU-Next/uapi KernelSU-Next/kernel/ 2>/dev/null || true
