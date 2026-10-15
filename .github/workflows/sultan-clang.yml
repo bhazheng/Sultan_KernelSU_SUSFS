@@ -254,7 +254,12 @@ jobs:
             echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
             retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
-            ln -sf ../uapi KernelSU-Next/kernel/uapi
+
+            # Salin header uapi dan include langsung ke tree KernelSU-Next agar selalu ditemukan di out-of-tree build
+            cp -a KernelSU-Next/uapi KernelSU-Next/kernel/ 2>/dev/null || true
+            cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/compat/ 2>/dev/null || true
+            cp -f KernelSU-Next/kernel/include/* KernelSU-Next/kernel/ 2>/dev/null || true
+            ln -sf ../uapi KernelSU-Next/kernel/uapi 2>/dev/null || true
 
             echo "[+] Menerapkan patch KernelSU-Next untuk kernel Sultan non-modular..."
             patch -p1 -d KernelSU-Next < "$GITHUB_WORKSPACE/patches/02_ksun_sultan.patch"
