@@ -615,6 +615,19 @@ jobs:
           else
             echo "::notice::Varian ${{ matrix.variant }} — pemeriksaan CONFIG_KSU dilewati (tanpa root)."
           fi
+          echo "========== Cek CONFIG_NOMOUNT setelah olddefconfig =========="
+          if ! grep -q "^CONFIG_NOMOUNT=y" "$CONFIG_FILE"; then
+            echo "::warning::CONFIG_NOMOUNT tidak aktif, menginjeksi ulang..."
+            ./scripts/config --file "$CONFIG_FILE" -e CONFIG_NOMOUNT
+            make $MAKE_ARGS olddefconfig
+          fi
+          if grep -q "^CONFIG_NOMOUNT=y" "$CONFIG_FILE"; then
+            echo "[+] CONFIG_NOMOUNT aktif (=y)."
+          else
+            echo "::error::CONFIG_NOMOUNT gagal diaktifkan!"
+            MISSING=1
+          fi
+
           if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
             echo "::warning::CONFIG_KALLSYMS_ALL tidak aktif, menginjeksi langsung ke $CONFIG_FILE..."
             ./scripts/config --file "$CONFIG_FILE" -e CONFIG_DEBUG_KERNEL -e CONFIG_KALLSYMS -e CONFIG_KALLSYMS_ALL
