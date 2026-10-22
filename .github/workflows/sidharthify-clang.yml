@@ -377,6 +377,27 @@ jobs:
             else
               echo "::warning::subdir-ccflags-y tidak ditemukan di kernel/Kbuild (hunk hanya fuzz)."
             fi
+
+            # Perbaiki resolusi KSU_KERNEL_DIR untuk build out-of-tree (6.12).
+            # scripts/Makefile.build di ACK 6.12 men-set
+            #   src := $(if $(VPATH),$(VPATH)/)$(obj)
+            # sehingga src SUDAH membawa prefiks srctree ("../drivers/kernelsu").
+            # kernel/Kbuild lalu melakukan KSU_KERNEL_DIR := $(srctree)/$(src)
+            # -> "../../drivers/kernelsu", yang dari objtree menunjuk ke LUAR tree:
+            #   No rule to make target '../../drivers/kernelsu/preinit/runner/runner.c'
+            # Di 6.1 tidak kena karena scripts/Makefile.build-nya masih
+            #   src := $(obj)
+            # $(abspath $(src)) benar untuk ketiga kasus: in-tree, objtree di dalam
+            # source tree, dan O= absolut. Pola dibuat toleran CRLF karena file
+            # dari git bisa punya line ending CRLF.
+            sed -i 's|^KSU_KERNEL_DIR := \$(srctree)/\$(src)\r\?$|KSU_KERNEL_DIR := $(abspath $(src))|' \
+              KernelSU-Next/kernel/Kbuild
+            grep -q 'KSU_KERNEL_DIR := \$(abspath \$(src))' KernelSU-Next/kernel/Kbuild || {
+              echo "::error::Gagal memperbaiki KSU_KERNEL_DIR di KernelSU-Next/kernel/Kbuild."
+              grep -n "KSU_KERNEL_DIR" KernelSU-Next/kernel/Kbuild || true
+              exit 1
+            }
+            echo "[+] KSU_KERNEL_DIR di-patch ke \$(abspath \$(src)) untuk build out-of-tree."
           fi
           if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
             sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -814,8 +835,19 @@ jobs:
             grep -iE "ksu|rust|bindgen|ashmem" /tmp/olddefconfig.log | tail -50 || true
             exit 1
           fi
-          # Install sanitised UAPI headers to $(objtree)/usr/include for KernelSU preinit runner
-          make "${MAKE_ARGS[@]}" headers_install || true
+          # Install sanitised UAPI headers to $(objtree)/usr/include.
+          # KernelSU mengaktifkan preinit runner hanya bila
+          #   $(objtree)/usr/include/linux/unistd.h ada (kernel/Kbuild:127).
+          # Tanpa header ini preinit di-skip diam-diam, jadi kegagalan harus terlihat.
+          make "${MAKE_ARGS[@]}" headers_install || {
+            echo "::error::make headers_install gagal — preinit runner KernelSU tidak akan dibangun."
+            exit 1
+          }
+          if [ ! -f out/usr/include/linux/unistd.h ] && [ ! -f usr/include/linux/unistd.h ]; then
+            echo "::error::usr/include/linux/unistd.h tidak ditemukan setelah headers_install."
+            exit 1
+          fi
+          echo "[+] UAPI headers siap untuk preinit runner KernelSU."
 
           # 3. Kompilasi Paralel
           make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j"$(nproc --all)" Image.lz4 dtbs || {
