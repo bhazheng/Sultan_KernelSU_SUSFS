@@ -69,9 +69,12 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          # dwarves  -> pahole >= 1.24, wajib untuk CONFIG_DEBUG_INFO_BTF + Rust (PAHOLE_HAS_LANG_EXCLUDE)
-          # libclang -> libclang.so untuk bindgen (Neutron tidak membawa libclang.so)
-          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev libdw-dev elfutils bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd dwarves libclang-dev
+          # dwarves      -> pahole >= 1.24, wajib untuk CONFIG_DEBUG_INFO_BTF + Rust (PAHOLE_HAS_LANG_EXCLUDE)
+          # libclang-18  -> libclang.so untuk bindgen. Kernel meneruskan CC_FLAGS_CFI
+          #                 (-fsanitize=kcfi, -fsanitize-cfi-icall-experimental-normalize-integers)
+          #                 ke bindgen; flag itu baru dikenal LLVM >= 17. libclang 16
+          #                 (default libclang-dev di noble) menolaknya dan bindgen panic.
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev libdw-dev elfutils bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd dwarves libclang-18-dev
 
       - name: Setup Rust 1.82.0 & Bindgen (Android 16 6.12)
         shell: bash
@@ -87,11 +90,13 @@ jobs:
           echo "RUST_SYSROOT=$RUST_SYSROOT" >> "$GITHUB_ENV"
           echo "RUSTC_PATH=$RUST_SYSROOT/bin/rustc" >> "$GITHUB_ENV"
 
-          # Download and setup prebuilt bindgen 0.69.4
+          # bindgen 0.69.5 (bukan 0.69.4): libclang >= 19.1 punya bug kompatibilitas
+          # dengan bindgen < 0.69.5 (rust-lang/rust-bindgen#2824), yang dideteksi
+          # oleh scripts/rust_is_available.sh di tree ini.
           # Arsip berisi satu direktori pembungkus, jadi --strip-components=1 wajib:
           # tanpa itu binary ada di bindgen-bin/bindgen-cli-x86_64-unknown-linux-gnu/bindgen
           mkdir -p "$GITHUB_WORKSPACE/bindgen-bin"
-          curl -fsSL https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.4/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz \
+          curl -fsSL https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.5/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz \
             | tar -xJ --strip-components=1 -C "$GITHUB_WORKSPACE/bindgen-bin"
           test -f "$GITHUB_WORKSPACE/bindgen-bin/bindgen" || {
             echo "::error::bindgen tidak ditemukan setelah ekstraksi (layout arsip berubah?)"
@@ -104,19 +109,45 @@ jobs:
           # bindgen memuat libclang.so saat runtime. Neutron Clang hanya membawa
           # lib/clang/<ver>/lib/libclang_rt.* (runtime compiler-rt), BUKAN libclang.so,
           # jadi LIBCLANG_PATH harus menunjuk ke libclang sistem.
+          #
+          # PENTING: pilih libclang TERBARU, bukan yang pertama ketemu. Kernel
+          # meneruskan CC_FLAGS_CFI (termasuk
+          # -fsanitize-cfi-icall-experimental-normalize-integers) ke bindgen lewat
+          # `bindgen_c_flags = $(c_flags)`. Flag itu baru dikenal LLVM >= 17;
+          # libclang 16 di Ubuntu 24.04 menolaknya dengan
+          # "error: unknown argument" dan bindgen panic.
           LIBCLANG_DIR=""
-          for d in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu; do
-            if compgen -G "$d/libclang.so*" > /dev/null; then
+          LIBCLANG_MAJOR=0
+          for d in $(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V -r); do
+            compgen -G "$d/libclang.so*" > /dev/null || continue
+            ver="$(basename "$(dirname "$d")" | sed -n 's/^llvm-\([0-9]\+\)$/\1/p')"
+            [ -n "$ver" ] || continue
+            if [ "$ver" -gt "$LIBCLANG_MAJOR" ]; then
               LIBCLANG_DIR="$d"
-              break
+              LIBCLANG_MAJOR="$ver"
             fi
           done
+          if [ -z "$LIBCLANG_DIR" ]; then
+            # Fallback: libclang di path sistem tanpa direktori llvm-<N>.
+            for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+              compgen -G "$d/libclang.so*" > /dev/null || continue
+              LIBCLANG_DIR="$d"
+              LIBCLANG_MAJOR="$(basename "$(readlink -f "$d"/libclang.so* 2>/dev/null | head -1)" 2>/dev/null | sed -n 's/^libclang\.so\.\([0-9]\+\).*/\1/p')"
+              [ -n "$LIBCLANG_MAJOR" ] || LIBCLANG_MAJOR=0
+              break
+            done
+          fi
           if [ -z "$LIBCLANG_DIR" ]; then
             echo "::error::libclang.so tidak ditemukan — pasang libclang-dev."
             exit 1
           fi
+          # Guard: libclang < 17 tidak bisa mem-parse CC_FLAGS_CFI kernel ini.
+          if [ "$LIBCLANG_MAJOR" -lt 17 ]; then
+            echo "::error::libclang $LIBCLANG_MAJOR terlalu tua (< 17) untuk flag CFI kernel; pasang libclang-18-dev."
+            exit 1
+          fi
           echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> "$GITHUB_ENV"
-          echo "[+] libclang dir: $LIBCLANG_DIR"
+          echo "[+] libclang dir: $LIBCLANG_DIR (major $LIBCLANG_MAJOR)"
 
           echo "[+] Tool versions:"
           "$RUST_SYSROOT/bin/rustc" --version
