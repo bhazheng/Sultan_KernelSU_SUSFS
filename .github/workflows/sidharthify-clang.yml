@@ -654,14 +654,26 @@ jobs:
             HOSTCFLAGS="-I/usr/include"
             HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/usr/lib/x86_64-linux-gnu"
           )
+          # Tree ini men-set `KBUILD_OUTPUT := out` di Makefile (bukan O= dari CLI),
+          # jadi objtree SELALU ./out dan config aktif ada di out/.config.
+          # Menulis ke .config di root source tree membuat outputmakefile menolak
+          # build dengan "The source tree is not clean, please run 'make mrproper'".
           rm -f .config
 
           # 1. Defconfig dasar
           make "${MAKE_ARGS[@]}" -j"$(nproc --all)" ${{ inputs.codename }}_defconfig
 
-          CONFIG_FILE=".config"
+          if [ -f out/.config ]; then
+            CONFIG_FILE="out/.config"
+          elif [ -f .config ]; then
+            CONFIG_FILE=".config"
+          else
+            echo "::error::Config hasil defconfig tidak ditemukan (out/.config maupun .config)."
+            exit 1
+          fi
+          echo "[+] Menggunakan config: $CONFIG_FILE"
 
-          # 2. Injeksi konfigurasi ke .config
+          # 2. Injeksi konfigurasi ke config aktif
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             ./scripts/config --file "$CONFIG_FILE" \
               -e CONFIG_KSU \
@@ -693,6 +705,16 @@ jobs:
             -e CONFIG_FUSE_FS \
             -e CONFIG_BPF_SYSCALL \
             -e CONFIG_FUSE_BPF
+
+          # scripts/config membuat file baru bila path salah; pastikan itu tidak terjadi.
+          if [ ! -s "$CONFIG_FILE" ]; then
+            echo "::error::Injeksi config gagal — $CONFIG_FILE kosong/tidak ada."
+            exit 1
+          fi
+          if [ -f .config ] && [ "$CONFIG_FILE" != ".config" ]; then
+            echo "::error::Ada .config nyasar di root source tree — build akan ditolak mrproper."
+            exit 1
+          fi
 
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
