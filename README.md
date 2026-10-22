@@ -136,7 +136,7 @@ Special thanks to the developers and open-source projects that make this kernel 
 - **[sidharthify](https://github.com/sidharthify)** - Creator and maintainer of the gs201 Linux 6.12 kernel tree.
 - **[kerneltoast (Sultan Alsawaf)](https://github.com/kerneltoast)** - Creator of Sultan Kernel.
 - **[bhazheng](https://github.com/bhazheng)** - Maintainer of the gs201 Tensynos kernel tree and Sultan patches.
-- **[pershoot](https://github.com/pershoot)** - For the `dev-susfs` fork of KernelSU-Next.
+- **[pershoot (KernelSU-Next dev-susfs)](https://github.com/pershoot/KernelSU-Next/tree/dev-susfs)** - For the `dev-susfs` fork of KernelSU-Next with native SuSFS integration.
 - **[tiann](https://github.com/tiann)** & **[rifsxd](https://github.com/KernelSU-Next/KernelSU-Next)** - KernelSU & KernelSU-Next core developers.
 - **[simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git)** - Creator of SuSFS.
 - **[maxsteeel](https://github.com/maxsteeel/nomount)** - Creator of the NoMount framework.

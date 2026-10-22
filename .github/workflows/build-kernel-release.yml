@@ -78,8 +78,8 @@ jobs:
         **Modules & Tooling:**
         - SuSFS Module: https://github.com/sidex15/ksu_module_susfs
         - NoMount Metamodule: attached `NoMount.zip` (universal)
-        - Manager: https://github.com/KernelSU-Next/KernelSU-Next
-        
+        - KernelSU-Next Tree: https://github.com/pershoot/KernelSU-Next/tree/dev-susfs
+        - Manager APK: https://github.com/KernelSU-Next/KernelSU-Next
         **Features Included:**
         [+] KernelSU-Next (pershoot dev-susfs)
         [+] SuSFS v2.3.0 Inline Hooks
