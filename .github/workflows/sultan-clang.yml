@@ -699,6 +699,9 @@ jobs:
           # mencegah loop rekursif syncconfig saat kompilasi paralel.
           make $MAKE_ARGS syncconfig
 
+          # Install sanitised UAPI headers to $(objtree)/usr/include for KernelSU preinit runner
+          make $MAKE_ARGS headers_install || true
+
           # 3. Kompilasi Paralel
           make $MAKE_ARGS LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"

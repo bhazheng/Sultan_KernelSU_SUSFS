@@ -783,6 +783,8 @@ jobs:
             grep -iE "ksu|rust|bindgen|ashmem" /tmp/olddefconfig.log | tail -50 || true
             exit 1
           fi
+          # Install sanitised UAPI headers to $(objtree)/usr/include for KernelSU preinit runner
+          make "${MAKE_ARGS[@]}" headers_install || true
 
           # 3. Kompilasi Paralel
           make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j"$(nproc --all)" Image.lz4 dtbs || {
