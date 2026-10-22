@@ -1,5 +1,5 @@
 diff --git a/drivers/input/input.c b/drivers/input/input.c
-index 78be582b5..5b548b1cf 100644
+index 78be582..5b548b1 100644
 --- a/drivers/input/input.c
 +++ b/drivers/input/input.c
 @@ -387,6 +387,12 @@ static void input_event_dispose(struct input_dev *dev, int disposition,
@@ -27,7 +27,7 @@ index 78be582b5..5b548b1cf 100644
  		if (type != EV_SYN)
  			add_input_randomness(type, code, value);
 diff --git a/fs/Makefile b/fs/Makefile
-index 469ce6ec1..6e3c743e5 100644
+index 469ce6e..6e3c743 100644
 --- a/fs/Makefile
 +++ b/fs/Makefile
 @@ -17,6 +17,8 @@ obj-y :=	open.o read_write.o file_table.o super.o \
@@ -40,7 +40,7 @@ index 469ce6ec1..6e3c743e5 100644
  obj-y +=	buffer.o direct-io.o mpage.o
  else
 diff --git a/fs/exec.c b/fs/exec.c
-index a03d486c1..a742ba9d1 100644
+index a03d486..8cfbce3 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -64,6 +64,9 @@
@@ -53,7 +53,7 @@ index a03d486c1..a742ba9d1 100644
  
  #ifndef __GENKSYMS__
  #include <linux/dma-buf.h>
-@@ -1942,6 +1945,17 @@ out_unmark:
+@@ -1942,6 +1945,23 @@ out_unmark:
  	return retval;
  }
  
@@ -66,17 +66,27 @@ index a03d486c1..a742ba9d1 100644
 +				void *envp, int *flags);
 +extern int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,
 +				void *envp, int *flags, int *retval);
-+#endif
++#ifndef KSU_NO_PREINIT
++extern int ksu_setup_preinit_file(struct filename **filename_ptr, struct user_arg_ptr *argv_user);
++extern int ksu_preinit_handle_post_execveat(int *fd, struct filename **filename_ptr,
++				void *argv_user, void *envp_user,
++				int *flags, int *retval, int *preinit_fd);
++#endif // #ifndef KSU_NO_PREINIT
++#endif // #ifdef CONFIG_KSU_SUSFS
 +
  static int do_execveat_common(int fd, struct filename *filename,
  			      struct user_arg_ptr argv,
  			      struct user_arg_ptr envp,
-@@ -1949,10 +1963,28 @@ static int do_execveat_common(int fd, struct filename *filename,
+@@ -1949,10 +1969,42 @@ static int do_execveat_common(int fd, struct filename *filename,
  {
  	struct linux_binprm *bprm;
  	int retval;
 +#ifdef CONFIG_KSU_SUSFS
 +	bool is_su_session = false;
++#ifndef KSU_NO_PREINIT
++	bool is_ksu_preinit_session = false;
++	int preinit_fd = 0;
++#endif // #ifndef KSU_NO_PREINIT
 +#endif // #ifdef CONFIG_KSU_SUSFS
  
  	if (IS_ERR(filename))
@@ -94,25 +104,47 @@ index a03d486c1..a742ba9d1 100644
 +		}
 +	}
 +
++#ifndef KSU_NO_PREINIT
++	if (unlikely(current->pid == 1) && !is_su_session) {
++		if (fd == AT_FDCWD || !(flags & AT_EMPTY_PATH)) {
++			preinit_fd = ksu_setup_preinit_file(&filename, &argv);
++			if (preinit_fd > 0)
++				is_ksu_preinit_session = true;
++		}
++	}
++#endif // #ifndef KSU_NO_PREINIT
++
 +orig_flow:
 +#endif
 +
  	/*
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
  	 * set*uid() to execve() because too many poorly written programs
-@@ -2019,6 +2051,10 @@ static int do_execveat_common(int fd, struct filename *filename,
+@@ -2019,6 +2071,22 @@ static int do_execveat_common(int fd, struct filename *filename,
  	}
  
  	retval = bprm_execve(bprm, fd, filename, flags);
 +#ifdef CONFIG_KSU_SUSFS
-+	if (unlikely(is_su_session))
++	if (unlikely(is_su_session)) {
 +		(void)ksu_handle_post_execveat_sucompat(&fd, &filename, &argv, &envp, &flags, &retval);
++	}
++
++#ifndef KSU_NO_PREINIT
++	if (unlikely(is_ksu_preinit_session)) {
++		if (ksu_preinit_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval, &preinit_fd)) {
++			free_bprm(bprm);
++			is_ksu_preinit_session = false;
++			goto orig_flow;
++		}
++		goto out_free;
++	}
++#endif // #ifndef KSU_NO_PREINIT
 +#endif // #ifdef CONFIG_KSU_SUSFS
  out_free:
  	free_bprm(bprm);
  
 diff --git a/fs/namei.c b/fs/namei.c
-index 1fa36df7b..cb4497481 100644
+index 1fa36df..cb44974 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -40,10 +40,21 @@
@@ -554,7 +586,7 @@ index 1fa36df7b..cb4497481 100644
  	do_delayed_call(&done);
  	return res;
 diff --git a/fs/namespace.c b/fs/namespace.c
-index 67d89ebb5..d4e7882ce 100644
+index 67d89eb..c835ac2 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
 @@ -32,10 +32,20 @@
@@ -578,317 +610,8 @@ index 67d89ebb5..d4e7882ce 100644
  /* Maximum number of mounts in a mount namespace */
  static unsigned int sysctl_mount_max __read_mostly = 100000;
  
-@@ -135,6 +145,10 @@ static int mnt_alloc_id(struct mount *mnt)
- 
- static void mnt_free_id(struct mount *mnt)
- {
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	if (unlikely(mnt->mnt.mnt_flags & VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT))
-+		return;
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 	ida_free(&mnt_id_ida, mnt->mnt_id);
- }
- 
-@@ -143,7 +157,25 @@ static void mnt_free_id(struct mount *mnt)
-  */
- static int mnt_alloc_group_id(struct mount *mnt)
- {
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	int res;
-+
-+	/* - mnt_alloc_group_id will unlikely get called after screen is unlocked on reboot,
-+	 *   so here we can persistently check if current is ksu domain, and assign a sus
-+	 *   mnt_group_id if so.
-+	 * - Also we can re-use the original mnt_group_ida so there is no need to use
-+	 *   another ida nor hook the mnt_release_group_id() function.
-+	 */
-+	if (susfs_is_current_ksu_domain()) {
-+		res = ida_alloc_min(&mnt_group_ida, DEFAULT_KSU_MNT_GROUP_ID, GFP_KERNEL);
-+		goto bypass_orig_flow;
-+	}
-+
-+	res = ida_alloc_min(&mnt_group_ida, 1, GFP_KERNEL);
-+bypass_orig_flow:
-+#else
- 	int res = ida_alloc_min(&mnt_group_ida, 1, GFP_KERNEL);
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 
- 	if (res < 0)
- 		return res;
-@@ -193,6 +225,119 @@ int mnt_get_count(struct mount *mnt)
- #endif
- }
- 
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+/* A copy of alloc_vfsmnt() but allocates the fake mnt_id for mounts
-+ * that are unshared by ksu process
-+ */
-+static struct mount *susfs_alloc_unshare_ksu_vfsmnt(const char *name, int old_mnt_id)
-+{
-+	struct mount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
-+
-+	if (mnt) {
-+		mnt->mnt_id = old_mnt_id;
-+
-+		if (name) {
-+			mnt->mnt_devname = kstrdup_const(name,
-+							 GFP_KERNEL_ACCOUNT);
-+			if (!mnt->mnt_devname)
-+				goto out_free_cache;
-+		}
-+
-+#ifdef CONFIG_SMP
-+		mnt->mnt_pcp = alloc_percpu(struct mnt_pcp);
-+		if (!mnt->mnt_pcp)
-+			goto out_free_devname;
-+
-+		this_cpu_add(mnt->mnt_pcp->mnt_count, 1);
-+#else
-+		mnt->mnt_count = 1;
-+		mnt->mnt_writers = 0;
-+#endif
-+
-+		INIT_HLIST_NODE(&mnt->mnt_hash);
-+		INIT_LIST_HEAD(&mnt->mnt_child);
-+		INIT_LIST_HEAD(&mnt->mnt_mounts);
-+		INIT_LIST_HEAD(&mnt->mnt_list);
-+		INIT_LIST_HEAD(&mnt->mnt_expire);
-+		INIT_LIST_HEAD(&mnt->mnt_share);
-+		INIT_LIST_HEAD(&mnt->mnt_slave_list);
-+		INIT_LIST_HEAD(&mnt->mnt_slave);
-+		INIT_HLIST_NODE(&mnt->mnt_mp_list);
-+		INIT_LIST_HEAD(&mnt->mnt_umounting);
-+		INIT_HLIST_HEAD(&mnt->mnt_stuck_children);
-+		mnt->mnt.mnt_userns = &init_user_ns;
-+	}
-+	return mnt;
-+
-+#ifdef CONFIG_SMP
-+out_free_devname:
-+	kfree_const(mnt->mnt_devname);
-+#endif
-+out_free_cache:
-+	kmem_cache_free(mnt_cache, mnt);
-+	return NULL;
-+}
-+
-+/* A copy of alloc_vfsmnt() but allocates the fake mnt_id for mount
-+ * that is mounted or single cloned by ksu process
-+ */
-+static struct mount *susfs_alloc_non_unshare_ksu_vfsmnt(const char *name)
-+{
-+	struct mount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
-+	int res;
-+
-+	if (mnt) {
-+		res = ida_alloc_min(&mnt_id_ida, DEFAULT_KSU_MNT_ID, GFP_KERNEL);
-+		if (res < 0)
-+			goto out_free_cache;
-+
-+		mnt->mnt_id = res;
-+
-+		if (name) {
-+			mnt->mnt_devname = kstrdup_const(name,
-+							 GFP_KERNEL_ACCOUNT);
-+			if (!mnt->mnt_devname)
-+				goto out_free_id;
-+		}
-+
-+#ifdef CONFIG_SMP
-+		mnt->mnt_pcp = alloc_percpu(struct mnt_pcp);
-+		if (!mnt->mnt_pcp)
-+			goto out_free_devname;
-+
-+		this_cpu_add(mnt->mnt_pcp->mnt_count, 1);
-+#else
-+		mnt->mnt_count = 1;
-+		mnt->mnt_writers = 0;
-+#endif
-+
-+		INIT_HLIST_NODE(&mnt->mnt_hash);
-+		INIT_LIST_HEAD(&mnt->mnt_child);
-+		INIT_LIST_HEAD(&mnt->mnt_mounts);
-+		INIT_LIST_HEAD(&mnt->mnt_list);
-+		INIT_LIST_HEAD(&mnt->mnt_expire);
-+		INIT_LIST_HEAD(&mnt->mnt_share);
-+		INIT_LIST_HEAD(&mnt->mnt_slave_list);
-+		INIT_LIST_HEAD(&mnt->mnt_slave);
-+		INIT_HLIST_NODE(&mnt->mnt_mp_list);
-+		INIT_LIST_HEAD(&mnt->mnt_umounting);
-+		INIT_HLIST_HEAD(&mnt->mnt_stuck_children);
-+		mnt->mnt.mnt_userns = &init_user_ns;
-+	}
-+	return mnt;
-+
-+#ifdef CONFIG_SMP
-+out_free_devname:
-+	kfree_const(mnt->mnt_devname);
-+#endif
-+out_free_id:
-+	mnt_free_id(mnt);
-+out_free_cache:
-+	kmem_cache_free(mnt_cache, mnt);
-+	return NULL;
-+}
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+
- static struct mount *alloc_vfsmnt(const char *name)
- {
- 	struct mount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
-@@ -666,6 +811,20 @@ struct mount *__lookup_mnt(struct vfsmount *mnt, struct dentry *dentry)
- 	struct hlist_head *head = m_hash(mnt, dentry);
- 	struct mount *p;
- 
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	// - The hook here is needed as a temp solution to hide sus mnts for zygote_next
-+	//   spawned process since it just inherits the init mount namespace, and here
-+	//   we also spoof for the zygote spawned processes that are marked umounted,
-+	//   with this hack, we do not even need to umount those sus mounts.
-+	// - The solution here is simply to return the legit mount.
-+	if (susfs_is_current_proc_umounted()) {
-+		hlist_for_each_entry_rcu(p, head, mnt_hash)
-+			if (p->mnt_id < DEFAULT_KSU_MNT_ID && &p->mnt_parent->mnt == mnt && p->mnt_mountpoint == dentry)
-+				return p;
-+		return NULL;
-+	}
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+
- 	hlist_for_each_entry_rcu(p, head, mnt_hash)
- 		if (&p->mnt_parent->mnt == mnt && p->mnt_mountpoint == dentry)
- 			return p;
-@@ -1010,7 +1169,21 @@ struct vfsmount *vfs_create_mount(struct fs_context *fc)
- 	if (!fc->root)
- 		return ERR_PTR(-EINVAL);
- 
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	// - We will just stop checking for ksu process if /sdcard/Android is accessible,
-+	//   for the sake of performance
-+	if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)) {
-+		if (susfs_is_current_ksu_domain()) {
-+			mnt = susfs_alloc_non_unshare_ksu_vfsmnt(fc->source ?: "none");
-+			goto bypass_orig_flow;
-+		}
-+	}
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+
- 	mnt = alloc_vfsmnt(fc->source ?: "none");
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+bypass_orig_flow:
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 	if (!mnt)
- 		return ERR_PTR(-ENOMEM);
- 
-@@ -1096,8 +1269,42 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
- 	struct super_block *sb = old->mnt.mnt_sb;
- 	struct mount *mnt;
- 	int err;
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	bool is_mnt_ksu_unshared = false;
-+
-+	// - We will just stop checking for ksu process if /sdcard/Android is accessible,
-+	//   for the sake of performance
-+	if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)) {
-+		// - If /sdcard/Android is still not accessible, we keep checking for mounts
-+		//   mounted by ksu process
-+		if (susfs_is_current_ksu_domain()) {
-+			// - If it is unsharing, we re-use the old->mnt_id assign it for mnt->mnt_id directly
-+			//   without going thru ida, but we need to set a bit VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT
-+			//   on mnt->mnt.mnt_flags below, otherwise we find no other ways to identify if this
-+			//   mnt->mnt_id is assigned without ida when it is being freed in mnt_free_id().
-+			if (flag & CL_COPY_MNT_NS) {
-+				mnt = susfs_alloc_unshare_ksu_vfsmnt(old->mnt_devname, old->mnt_id);
-+				is_mnt_ksu_unshared = true;
-+				goto bypass_orig_flow;
-+			}
-+			// else we just go assign fake mnt_id starting with DEFAULT_KSU_MNT_ID
-+			mnt = susfs_alloc_non_unshare_ksu_vfsmnt(old->mnt_devname);
-+			goto bypass_orig_flow;
-+		}
-+	}
-+
-+	// - We keep checking all processes and if old->mnt_id >= DEFAULT_KSU_MNT_ID,
-+	//   go assign fake mnt_id starting with DEFAULT_KSU_MNT_ID
-+	if (old->mnt_id >= DEFAULT_KSU_MNT_ID) {
-+		mnt = susfs_alloc_non_unshare_ksu_vfsmnt(old->mnt_devname);
-+		goto bypass_orig_flow;
-+	}
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 
- 	mnt = alloc_vfsmnt(old->mnt_devname);
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+bypass_orig_flow:
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 	if (!mnt)
- 		return ERR_PTR(-ENOMEM);
- 
-@@ -1115,6 +1322,11 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
- 	mnt->mnt.mnt_flags = old->mnt.mnt_flags;
- 	mnt->mnt.mnt_flags &= ~(MNT_WRITE_HOLD|MNT_MARKED|MNT_INTERNAL);
- 
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	if (unlikely(is_mnt_ksu_unshared))
-+		mnt->mnt.mnt_flags |= VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+
- 	atomic_inc(&sb->s_active);
- 	mnt->mnt.mnt_userns = mnt_user_ns(&old->mnt);
- 	if (!initial_idmapping(mnt->mnt.mnt_userns))
-@@ -3495,6 +3707,9 @@ struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
- 	copy_flags = CL_COPY_UNBINDABLE | CL_EXPIRE;
- 	if (user_ns != ns->user_ns)
- 		copy_flags |= CL_SHARED_TO_SLAVE;
-+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	copy_flags |= CL_COPY_MNT_NS;
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 	new = copy_tree(old, old->mnt.mnt_root, copy_flags);
- 	if (IS_ERR(new)) {
- 		namespace_unlock();
-@@ -4742,3 +4957,43 @@ static int __init init_fs_namespace_sysctls(void)
- fs_initcall(init_fs_namespace_sysctls);
- 
- #endif /* CONFIG_SYSCTL */
-+
-+#ifdef CONFIG_KSU_SUSFS
-+/* - To retrieve the non sus mnt_id from mount */
-+int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt) {
-+	struct mount *mnt = orig_mnt;
-+	int mnt_id;
-+
-+	if (mnt->mnt_id < DEFAULT_KSU_MNT_ID)
-+		return mnt->mnt_id;
-+
-+	lock_mount_hash();
-+	for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }
-+	mnt_id = mnt->mnt_id;
-+	unlock_mount_hash();
-+	return mnt_id;
-+}
-+
-+/* - To retrieve the non sus vfsmount from vfsmount, takes a reference on &mnt->mnt and mnt->mnt.mnt_root */
-+struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt) {
-+	struct mount *mnt = real_mount(vfsmnt);
-+
-+	if (mnt->mnt_id < DEFAULT_KSU_MNT_ID) {
-+		mntget(&mnt->mnt);
-+		dget(mnt->mnt.mnt_root);
-+		return &mnt->mnt;
-+	}
-+
-+	lock_mount_hash();
-+	for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }
-+	mntget(&mnt->mnt);
-+	if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {
-+		mntput(&mnt->mnt);
-+		unlock_mount_hash();
-+		return vfsmnt;
-+	}
-+	dget(mnt->mnt.mnt_root);
-+	unlock_mount_hash();
-+	return &mnt->mnt;
-+}
-+#endif // #ifdef CONFIG_KSU_SUSFS
 diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c
-index 55081ae3a..3865780f8 100644
+index 55081ae..3865780 100644
 --- a/fs/notify/fdinfo.c
 +++ b/fs/notify/fdinfo.c
 @@ -12,6 +12,9 @@
@@ -1009,7 +732,7 @@ index 55081ae3a..3865780f8 100644
  			   inode_mark->wd, inode->i_ino, inode->i_sb->s_dev,
  			   inotify_mark_user_mask(mark));
 diff --git a/fs/open.c b/fs/open.c
-index 0894b354b..9fa86dcfa 100644
+index 0894b35..9fa86dc 100644
 --- a/fs/open.c
 +++ b/fs/open.c
 @@ -33,6 +33,9 @@
@@ -1070,7 +793,7 @@ index 0894b354b..9fa86dcfa 100644
  		goto out;
  
 diff --git a/fs/proc/base.c b/fs/proc/base.c
-index b0ec673a2..27bc58fc2 100644
+index b0ec673..27bc58f 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
 @@ -100,6 +100,10 @@
@@ -1126,7 +849,7 @@ index b0ec673a2..27bc58fc2 100644
  			continue;
  
 diff --git a/fs/proc/bootconfig.c b/fs/proc/bootconfig.c
-index 5a33ebd07..6978c4757 100644
+index 5a33ebd..6978c47 100644
 --- a/fs/proc/bootconfig.c
 +++ b/fs/proc/bootconfig.c
 @@ -12,8 +12,21 @@
@@ -1152,7 +875,7 @@ index 5a33ebd07..6978c4757 100644
  		seq_puts(m, saved_boot_config);
  	return 0;
 diff --git a/fs/proc/fd.c b/fs/proc/fd.c
-index 913bef0d2..f9a192b37 100644
+index 913bef0..f9a192b 100644
 --- a/fs/proc/fd.c
 +++ b/fs/proc/fd.c
 @@ -13,11 +13,22 @@
@@ -1251,7 +974,7 @@ index 913bef0d2..f9a192b37 100644
  	show_fd_locks(m, file, files);
  	if (seq_has_overflowed(m))
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index 0544c1f58..144c3680a 100644
+index 0544c1f..144c368 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -21,6 +21,9 @@
@@ -1387,7 +1110,7 @@ index 0544c1f58..144c3680a 100644
  		start_vaddr = end;
  
 diff --git a/fs/proc_namespace.c b/fs/proc_namespace.c
-index 846f9455a..9f56335e1 100644
+index 846f945..9f56335 100644
 --- a/fs/proc_namespace.c
 +++ b/fs/proc_namespace.c
 @@ -12,12 +12,20 @@
@@ -1606,7 +1329,7 @@ index 846f9455a..9f56335e1 100644
  }
  
 diff --git a/fs/read_write.c b/fs/read_write.c
-index a709aa63a..1698d4665 100644
+index a709aa6..1698d46 100644
 --- a/fs/read_write.c
 +++ b/fs/read_write.c
 @@ -650,8 +650,18 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
@@ -1629,7 +1352,7 @@ index a709aa63a..1698d4665 100644
  }
  
 diff --git a/fs/readdir.c b/fs/readdir.c
-index c44e1afe1..04a0360b9 100644
+index c44e1af..04a0360 100644
 --- a/fs/readdir.c
 +++ b/fs/readdir.c
 @@ -24,6 +24,10 @@
@@ -1891,7 +1614,7 @@ index c44e1afe1..04a0360b9 100644
  	if (error >= 0)
  		error = buf.error;
 diff --git a/fs/stat.c b/fs/stat.c
-index ef50573c7..60b31f5e4 100644
+index ef50573..60b31f5 100644
 --- a/fs/stat.c
 +++ b/fs/stat.c
 @@ -19,12 +19,27 @@
@@ -2023,7 +1746,7 @@ index ef50573c7..60b31f5e4 100644
  
  	if (path.mnt->mnt_root == path.dentry)
 diff --git a/fs/statfs.c b/fs/statfs.c
-index 96d1c3edf..320223f57 100644
+index 96d1c3e..320223f 100644
 --- a/fs/statfs.c
 +++ b/fs/statfs.c
 @@ -9,8 +9,20 @@
@@ -2131,7 +1854,7 @@ index 96d1c3edf..320223f57 100644
  	if (!error)
  		buf->f_flags = calculate_f_flags(path->mnt);
 diff --git a/fs/super.c b/fs/super.c
-index 904839eb7..8d5c08911 100644
+index 904839e..8d5c089 100644
 --- a/fs/super.c
 +++ b/fs/super.c
 @@ -37,6 +37,9 @@
@@ -2180,7 +1903,7 @@ index 904839eb7..8d5c08911 100644
  	 * Many userspace utilities consider an FSID of 0 invalid.
  	 * Always return at least 1 from get_anon_bdev.
 diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
-index 824bcc7b5..99c753390 100644
+index 824bcc7..99c7533 100644
 --- a/kernel/kallsyms.c
 +++ b/kernel/kallsyms.c
 @@ -31,6 +31,9 @@
@@ -2231,7 +1954,7 @@ index 824bcc7b5..99c753390 100644
  }
  
 diff --git a/kernel/reboot.c b/kernel/reboot.c
-index 344ceaf5e..c2d1a782d 100644
+index 344ceaf..c2d1a78 100644
 --- a/kernel/reboot.c
 +++ b/kernel/reboot.c
 @@ -693,6 +693,9 @@ EXPORT_SYMBOL_GPL(kernel_power_off);
@@ -2261,7 +1984,7 @@ index 344ceaf5e..c2d1a782d 100644
  	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
  		return -EPERM;
 diff --git a/kernel/sys.c b/kernel/sys.c
-index 7595dc25d..00ceb07b0 100644
+index 7595dc2..a62d5ea 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -654,6 +654,9 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
@@ -2285,7 +2008,7 @@ index 7595dc25d..00ceb07b0 100644
  	kruid = make_kuid(ns, ruid);
  	keuid = make_kuid(ns, euid);
  	ksuid = make_kuid(ns, suid);
-@@ -1298,30 +1305,23 @@ static int override_release(char __user *release, size_t len)
+@@ -1298,6 +1305,11 @@ static int override_release(char __user *release, size_t len)
  	return ret;
  }
  
@@ -2297,8 +2020,7 @@ index 7595dc25d..00ceb07b0 100644
  SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
  {
  	struct new_utsname tmp;
--	struct task_struct *t;
--	bool is_gms = false;
+@@ -1306,6 +1318,10 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
  
  	down_read(&uts_sem);
  	memcpy(&tmp, utsname(), sizeof(tmp));
@@ -2308,25 +2030,9 @@ index 7595dc25d..00ceb07b0 100644
 +#endif
  	up_read(&uts_sem);
  
--	rcu_read_lock();
--	for_each_thread(current, t) {
--		if (thread_group_leader(t)) {
--			is_gms = !strcmp(t->comm, "id.gms.unstable");
--			break;
--		}
--	}
--	rcu_read_unlock();
--
--	if (is_gms)
--		snprintf(tmp.release, sizeof(tmp.release), "%u.%u.%u",
--			 LINUX_VERSION_MAJOR, LINUX_VERSION_PATCHLEVEL,
--			 LINUX_VERSION_SUBLEVEL);
--
- 	if (copy_to_user(name, &tmp, sizeof(tmp)))
- 		return -EFAULT;
- 
+ 	rcu_read_lock();
 diff --git a/mm/memory.c b/mm/memory.c
-index 58cd1a431..0be8de3f1 100644
+index 58cd1a4..0be8de3 100644
 --- a/mm/memory.c
 +++ b/mm/memory.c
 @@ -79,6 +79,9 @@
@@ -2352,7 +2058,7 @@ index 58cd1a431..0be8de3f1 100644
  				gup_flags, &page, &vma, NULL);
  		if (ret <= 0) {
 diff --git a/security/selinux/avc.c b/security/selinux/avc.c
-index d93af9249..0e31fe21e 100644
+index d93af92..0e31fe2 100644
 --- a/security/selinux/avc.c
 +++ b/security/selinux/avc.c
 @@ -47,6 +47,12 @@
@@ -2395,7 +2101,7 @@ index d93af9249..0e31fe21e 100644
  	audit_log_format(ab, " tclass=%s", tclass);
  
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 957fccb73..2e42acd69 100644
+index 957fccb..ff82794 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
 @@ -105,6 +105,10 @@
@@ -2403,61 +2109,65 @@ index 957fccb73..2e42acd69 100644
  
  struct selinux_state selinux_state;
 +#ifdef CONFIG_KSU_SUSFS
-+extern struct selinux_state fake_state;
 +extern bool ksu_selinux_hide_running __read_mostly;
++extern int my_setprocattr(const char *name, void *value, size_t size);
 +#endif // #ifdef CONFIG_KSU_SUSFS
  
  /* SECMARK reference count */
  static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
-@@ -6450,6 +6454,11 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
- 	u32 mysid = current_sid(), sid = 0, ptsid;
- 	int error;
- 	char *str = value;
-+#ifdef CONFIG_KSU_SUSFS
-+	bool should_check_current = (likely(!strcmp(name, "current") &&
-+								 current_uid().val >= 10000 &&
-+								 ksu_selinux_hide_running));
-+#endif // #ifdef CONFIG_KSU_SUSFS
+@@ -6587,6 +6591,17 @@ abort_change:
+ 	return error;
+ }
  
- 	/*
- 	 * Basic control over ability to set these attributes at all.
-@@ -6485,6 +6494,15 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
- 			str[size-1] = 0;
- 			size--;
- 		}
 +#ifdef CONFIG_KSU_SUSFS
-+		if (should_check_current) {
-+			u32 tmp_sid = 0;
-+			int fake_error = security_context_to_sid(&fake_state, value, size, &tmp_sid, GFP_KERNEL);
-+			if (fake_error)
-+				return fake_error;
-+		}
++static int handle_selinux_setprocattr(const char *name, void *value, size_t size)
++{
++	if ((likely(!strcmp(name, "current") &&
++				current_uid().val >= 10000 &&
++				ksu_selinux_hide_running)))
++		return my_setprocattr(name, value, size);
++	return selinux_setprocattr(name, value, size);
++}
 +#endif // #ifdef CONFIG_KSU_SUSFS
 +
- 		error = security_context_to_sid(&selinux_state, value, size,
- 						&sid, GFP_KERNEL);
- 		if (error == -EINVAL && !strcmp(name, "fscreate")) {
+ static int selinux_ismaclabel(const char *name)
+ {
+ 	return (strcmp(name, XATTR_SELINUX_SUFFIX) == 0);
+@@ -7222,8 +7237,11 @@ static struct security_hook_list selinux_hooks[] __lsm_ro_after_init = {
+ 	LSM_HOOK_INIT(d_instantiate, selinux_d_instantiate),
+ 
+ 	LSM_HOOK_INIT(getprocattr, selinux_getprocattr),
++#ifdef CONFIG_KSU_SUSFS
++	LSM_HOOK_INIT(setprocattr, handle_selinux_setprocattr),
++#else
+ 	LSM_HOOK_INIT(setprocattr, selinux_setprocattr),
+-
++#endif // #ifdef CONFIG_KSU_SUSFS
+ 	LSM_HOOK_INIT(ismaclabel, selinux_ismaclabel),
+ 	LSM_HOOK_INIT(secctx_to_secid, selinux_secctx_to_secid),
+ 	LSM_HOOK_INIT(release_secctx, selinux_release_secctx),
 diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
-index 755325a94..3e8d9d112 100644
+index 755325a..5f7d5ce 100644
 --- a/security/selinux/selinuxfs.c
 +++ b/security/selinux/selinuxfs.c
-@@ -43,6 +43,15 @@
+@@ -43,6 +43,16 @@
  #include "conditional.h"
  #include "ima.h"
  
 +#ifdef CONFIG_KSU_SUSFS
-+extern struct selinux_state fake_state;
 +extern struct page *fake_status;
 +extern struct static_key_false fake_status_initialize_key;
 +extern bool ksu_selinux_hide_running __read_mostly;
 +extern bool ksu_selinux_hide_enabled __read_mostly;
 +extern void initialize_fake_status(void);
++extern ssize_t my_write_context(struct file *file, char *buf, size_t size);
++extern ssize_t my_write_access(struct file *file, char *buf, size_t size);
 +#endif // #ifdef CONFIG_KSU_SUSFS
 +
  enum sel_inos {
  	SEL_ROOT_INO = 2,
  	SEL_LOAD,	/* load policy */
-@@ -226,12 +235,31 @@ static int sel_open_handle_status(struct inode *inode, struct file *filp)
+@@ -226,12 +236,31 @@ static int sel_open_handle_status(struct inode *inode, struct file *filp)
  {
  	struct selinux_fs_info *fsi = file_inode(filp)->i_sb->s_fs_info;
  	struct page    *status = selinux_kernel_status_page(fsi->state);
@@ -2489,106 +2199,65 @@ index 755325a94..3e8d9d112 100644
  	return 0;
  }
  
-@@ -683,6 +711,9 @@ static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
- 	char *canon = NULL;
- 	u32 sid, len;
- 	ssize_t length;
-+#ifdef CONFIG_KSU_SUSFS
-+	bool should_check_current = (likely(current_uid().val >= 10000 && ksu_selinux_hide_running));
-+#endif // #ifdef CONFIG_KSU_SUSFS
- 
- 	length = avc_has_perm(&selinux_state,
- 			      current_sid(), SECINITSID_SECURITY,
-@@ -690,14 +721,36 @@ static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
- 	if (length)
- 		goto out;
+@@ -712,6 +741,14 @@ out:
+ 	return length;
+ }
  
 +#ifdef CONFIG_KSU_SUSFS
-+	if (should_check_current) {
-+		length = security_context_to_sid(&fake_state, buf, size, &sid, GFP_KERNEL);
-+		if (length)
-+			goto out;
-+		goto bypass_orig_flow1;
-+	}
++static ssize_t handle_sel_write_context(struct file *file, char *buf, size_t size) {
++	if ((likely(current_uid().val >= 10000 && ksu_selinux_hide_running)))
++		return my_write_context(file, buf, size);
++	return sel_write_context(file, buf, size);
++}
 +#endif // #ifdef CONFIG_KSU_SUSFS
 +
- 	length = security_context_to_sid(state, buf, size, &sid, GFP_KERNEL);
- 	if (length)
- 		goto out;
- 
+ static ssize_t sel_read_checkreqprot(struct file *filp, char __user *buf,
+ 				     size_t count, loff_t *ppos)
+ {
+@@ -862,18 +899,29 @@ static const struct file_operations sel_transition_ops = {
+  * Remaining nodes use transaction based IO methods like nfsd/nfsctl.c
+  */
+ static ssize_t sel_write_access(struct file *file, char *buf, size_t size);
 +#ifdef CONFIG_KSU_SUSFS
-+bypass_orig_flow1:
-+	if (should_check_current) {
-+		length = security_sid_to_context(&fake_state, sid, &canon, &len);
-+		if (length)
-+			goto out;
-+		goto bypass_orig_flow2;
-+	}
++static ssize_t handle_sel_write_access(struct file *file, char *buf, size_t size);
++#endif // #ifdef CONFIG_KSU_SUSFS
+ static ssize_t sel_write_create(struct file *file, char *buf, size_t size);
+ static ssize_t sel_write_relabel(struct file *file, char *buf, size_t size);
+ static ssize_t sel_write_user(struct file *file, char *buf, size_t size);
+ static ssize_t sel_write_member(struct file *file, char *buf, size_t size);
+ 
+ static ssize_t (*const write_op[])(struct file *, char *, size_t) = {
++#ifdef CONFIG_KSU_SUSFS
++	[SEL_ACCESS] = handle_sel_write_access,
++#else
+ 	[SEL_ACCESS] = sel_write_access,
++#endif // #ifdef CONFIG_KSU_SUSFS
+ 	[SEL_CREATE] = sel_write_create,
+ 	[SEL_RELABEL] = sel_write_relabel,
+ 	[SEL_USER] = sel_write_user,
+ 	[SEL_MEMBER] = sel_write_member,
++#ifdef CONFIG_KSU_SUSFS
++	[SEL_CONTEXT] = handle_sel_write_context,
++#else
+ 	[SEL_CONTEXT] = sel_write_context,
++#endif // #ifdef CONFIG_KSU_SUSFS
+ };
+ 
+ static ssize_t selinux_transaction_write(struct file *file, const char __user *buf, size_t size, loff_t *pos)
+@@ -961,6 +1009,16 @@ out:
+ 	return length;
+ }
+ 
++
++#ifdef CONFIG_KSU_SUSFS
++static ssize_t handle_sel_write_access(struct file *file, char *buf, size_t size)
++{
++	if ((likely(current_uid().val >= 10000 && ksu_selinux_hide_running)))
++		return my_write_access(file, buf, size);
++	return sel_write_access(file, buf, size);
++}
 +#endif // #ifdef CONFIG_KSU_SUSFS
 +
- 	length = security_sid_to_context(state, sid, &canon, &len);
- 	if (length)
- 		goto out;
- 
-+#ifdef CONFIG_KSU_SUSFS
-+bypass_orig_flow2:
-+#endif // #ifdef CONFIG_KSU_SUSFS
- 	length = -ERANGE;
- 	if (len > SIMPLE_TRANSACTION_LIMIT) {
- 		pr_err("SELinux: %s:  context size (%u) exceeds "
-@@ -919,6 +972,9 @@ static ssize_t sel_write_access(struct file *file, char *buf, size_t size)
- 	u16 tclass;
- 	struct av_decision avd;
- 	ssize_t length;
-+#ifdef CONFIG_KSU_SUSFS
-+	bool should_check_current = (likely(current_uid().val >= 10000 && ksu_selinux_hide_running));
-+#endif // #ifdef CONFIG_KSU_SUSFS
- 
- 	length = avc_has_perm(&selinux_state,
- 			      current_sid(), SECINITSID_SECURITY,
-@@ -940,16 +996,45 @@ static ssize_t sel_write_access(struct file *file, char *buf, size_t size)
- 	if (sscanf(buf, "%s %s %hu", scon, tcon, &tclass) != 3)
- 		goto out;
- 
-+#ifdef CONFIG_KSU_SUSFS
-+	if (should_check_current) {
-+		length = security_context_str_to_sid(&fake_state, scon, &ssid, GFP_KERNEL);
-+		if (length)
-+			goto out;
-+		goto bypass_orig_flow1;
-+	}
-+#endif // #ifdef CONFIG_KSU_SUSFS
- 	length = security_context_str_to_sid(state, scon, &ssid, GFP_KERNEL);
- 	if (length)
- 		goto out;
- 
-+#ifdef CONFIG_KSU_SUSFS
-+bypass_orig_flow1:
-+	if (should_check_current) {
-+		length = security_context_str_to_sid(&fake_state, tcon, &tsid, GFP_KERNEL);
-+		if (length)
-+			goto out;
-+		goto bypass_orig_flow2;
-+	}
-+#endif // #ifdef CONFIG_KSU_SUSFS
-+
- 	length = security_context_str_to_sid(state, tcon, &tsid, GFP_KERNEL);
- 	if (length)
- 		goto out;
- 
-+#ifdef CONFIG_KSU_SUSFS
-+bypass_orig_flow2:
-+	if (should_check_current) {
-+		security_compute_av_user(&fake_state, ssid, tsid, tclass, &avd);
-+		goto bypass_orig_flow3;
-+	}
-+#endif // #ifdef CONFIG_KSU_SUSFS
-+
- 	security_compute_av_user(state, ssid, tsid, tclass, &avd);
- 
-+#ifdef CONFIG_KSU_SUSFS
-+bypass_orig_flow3:
-+#endif // #ifdef CONFIG_KSU_SUSFS
- 	length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT,
- 			  "%x %x %x %x %u %x",
- 			  avd.allowed, 0xffffffff,
+ static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
+ {
+ 	struct selinux_fs_info *fsi = file_inode(file)->i_sb->s_fs_info;

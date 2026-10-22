@@ -1,20 +1,24 @@
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+index 4a864771..146cf5ef 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
-@@ -21,9 +21,9 @@ endif
+@@ -21,10 +21,10 @@ endif
  # Core utilities ('selinux hide'/hooks)
  ifeq ($(strip $(CONFIG_KPROBES)),y)
  kernelsu-objs += hook/lsm_hook.o
 +endif
  ifdef KSU_ARCH
  kernelsu-objs += hook/$(KSU_ARCH)/patch_memory.o
--endif
  endif
+-endif
  
  # Hooks (excluded for SuSFS)
-@@ -120,6 +120,7 @@ else
+ ifneq ($(strip $(CONFIG_KSU_SUSFS)),y)
+@@ -120,6 +120,7 @@ KSU_KERNEL_DIR := $(src)
  endif
  
  ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include -I$(KSU_KERNEL_DIR)/..
 +subdir-ccflags-y += $(ccflags-y) -I$(srctree)/KernelSU-Next -I$(srctree)/drivers/kernelsu/include -I$(srctree)/drivers/kernelsu
  
- obj-$(CONFIG_KSU) += kernelsu.o
+ # preinit runner: a static nolibc binary embedded into kernelsu, see preinit/.
+ # It is built against the installed UAPI headers of the target kernel
