@@ -68,8 +68,31 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev libdw-dev elfutils bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd
 
+      - name: Setup Rust 1.82.0 & Bindgen (Android 16 6.12)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "[+] Setting up Rust 1.82.0 and bindgen for kernel Rust support (ashmem)..."
+          rustup toolchain install 1.82.0 --profile minimal
+          rustup default 1.82.0
+          rustup component add rust-src --toolchain 1.82.0
+          rustup target add aarch64-unknown-none --toolchain 1.82.0 2>/dev/null || true
+
+          RUST_SYSROOT=$(rustc +1.82.0 --print sysroot)
+          echo "RUST_SYSROOT=$RUST_SYSROOT" >> "$GITHUB_ENV"
+          echo "RUSTC_PATH=$RUST_SYSROOT/bin/rustc" >> "$GITHUB_ENV"
+
+          # Download and setup prebuilt bindgen 0.69.4
+          mkdir -p "$GITHUB_WORKSPACE/bindgen-bin"
+          curl -fsSL https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.4/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz | tar -xJ -C "$GITHUB_WORKSPACE/bindgen-bin"
+          chmod +x "$GITHUB_WORKSPACE/bindgen-bin/bindgen"
+          echo "BINDGEN_PATH=$GITHUB_WORKSPACE/bindgen-bin/bindgen" >> "$GITHUB_ENV"
+
+          echo "[+] Tool versions:"
+          "$RUST_SYSROOT/bin/rustc" --version
+          "$GITHUB_WORKSPACE/bindgen-bin/bindgen" --version
       - name: Download and extract Neutron Clang (06092026)
         shell: bash
         run: |
@@ -499,9 +522,6 @@ jobs:
             echo "CONFIG_NOMOUNT=y"
           } >> "$DEFCONFIG"
 
-          # Matikan CONFIG_RUST agar binder C bawaan digunakan tanpa mewajibkan Android rust toolchain
-          sed -i 's/CONFIG_RUST=y/# CONFIG_RUST is not set/' "$DEFCONFIG" 2>/dev/null || true
-          sed -i 's/CONFIG_ANDROID_BINDER_IPC_RUST=m/# CONFIG_ANDROID_BINDER_IPC_RUST is not set/' "$DEFCONFIG" 2>/dev/null || true
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             {
@@ -544,8 +564,21 @@ jobs:
           if [ -d "KernelSU-Next" ]; then
             export KCFLAGS="$KCFLAGS -I$PWD/drivers/kernelsu -I$PWD/drivers/kernelsu/include -I$PWD/KernelSU-Next -I$PWD/KernelSU-Next/kernel -I$PWD/KernelSU-Next/kernel/include"
           fi
-          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
 
+          # android16-6.12 builds ashmem in Rust, and Rust with MODVERSIONS needs
+          # gendwarfksyms. These have to be on every make command line, or kbuild sees
+          # the system rustc and quietly drops CONFIG_RUST.
+          export LIBCLANG_PATH="$GITHUB_WORKSPACE/clang/lib"
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/clang/lib:${LD_LIBRARY_PATH:-}"
+          TOOL_ARGS=(
+            RUSTC="${RUSTC_PATH}"
+            HOSTRUSTC="${RUSTC_PATH}"
+            BINDGEN="${BINDGEN_PATH}"
+            HOSTCFLAGS="-I/usr/include"
+            HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/usr/lib/x86_64-linux-gnu"
+          )
+
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0 ${TOOL_ARGS[*]}"
           rm -f .config
 
           # 1. Defconfig dasar
@@ -570,9 +603,9 @@ jobs:
             -d CONFIG_LTO_GCC \
             -d CONFIG_LTO_NONE \
             -e CONFIG_LTO_CLANG_THIN \
-            -d CONFIG_RUST \
-            -d CONFIG_ANDROID_BINDER_IPC_RUST \
-            -e CONFIG_ANDROID_BINDER_IPC \
+            -e CONFIG_RUST \
+            -e CONFIG_ASHMEM \
+            -m CONFIG_ANDROID_BINDER_IPC_RUST \
             -e CONFIG_NTSYNC \
             -e CONFIG_NOMOUNT \
             -e CONFIG_THREAD_INFO_IN_TASK \
@@ -627,6 +660,8 @@ jobs:
             echo "::error::CONFIG_NOMOUNT gagal diaktifkan!"
             MISSING=1
           fi
+          echo "========== Cek CONFIG_RUST & CONFIG_ASHMEM setelah olddefconfig =========="
+          grep -E "CONFIG_(RUST|ASHMEM|ANDROID_BINDER_IPC_RUST)" "$CONFIG_FILE" || true
 
           if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
             echo "::warning::CONFIG_KALLSYMS_ALL tidak aktif, menginjeksi langsung ke $CONFIG_FILE..."
