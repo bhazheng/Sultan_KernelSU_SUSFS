@@ -34,6 +34,7 @@ on:
 jobs:
   build-kernel-sidharthify-kernelsu-susfs:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +69,9 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev libdw-dev elfutils bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd
+          # dwarves  -> pahole >= 1.24, wajib untuk CONFIG_DEBUG_INFO_BTF + Rust (PAHOLE_HAS_LANG_EXCLUDE)
+          # libclang -> libclang.so untuk bindgen (Neutron tidak membawa libclang.so)
+          sudo apt-get install -y --no-install-recommends libssl-dev libelf-dev libdw-dev elfutils bc bison flex perl lz4 ccache zlib1g-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi cmake zstd dwarves libclang-dev
 
       - name: Setup Rust 1.82.0 & Bindgen (Android 16 6.12)
         shell: bash
@@ -85,14 +88,40 @@ jobs:
           echo "RUSTC_PATH=$RUST_SYSROOT/bin/rustc" >> "$GITHUB_ENV"
 
           # Download and setup prebuilt bindgen 0.69.4
+          # Arsip berisi satu direktori pembungkus, jadi --strip-components=1 wajib:
+          # tanpa itu binary ada di bindgen-bin/bindgen-cli-x86_64-unknown-linux-gnu/bindgen
           mkdir -p "$GITHUB_WORKSPACE/bindgen-bin"
-          curl -fsSL https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.4/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz | tar -xJ -C "$GITHUB_WORKSPACE/bindgen-bin"
+          curl -fsSL https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.4/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz \
+            | tar -xJ --strip-components=1 -C "$GITHUB_WORKSPACE/bindgen-bin"
+          test -f "$GITHUB_WORKSPACE/bindgen-bin/bindgen" || {
+            echo "::error::bindgen tidak ditemukan setelah ekstraksi (layout arsip berubah?)"
+            ls -la "$GITHUB_WORKSPACE/bindgen-bin"
+            exit 1
+          }
           chmod +x "$GITHUB_WORKSPACE/bindgen-bin/bindgen"
           echo "BINDGEN_PATH=$GITHUB_WORKSPACE/bindgen-bin/bindgen" >> "$GITHUB_ENV"
+
+          # bindgen memuat libclang.so saat runtime. Neutron Clang hanya membawa
+          # lib/clang/<ver>/lib/libclang_rt.* (runtime compiler-rt), BUKAN libclang.so,
+          # jadi LIBCLANG_PATH harus menunjuk ke libclang sistem.
+          LIBCLANG_DIR=""
+          for d in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu; do
+            if compgen -G "$d/libclang.so*" > /dev/null; then
+              LIBCLANG_DIR="$d"
+              break
+            fi
+          done
+          if [ -z "$LIBCLANG_DIR" ]; then
+            echo "::error::libclang.so tidak ditemukan — pasang libclang-dev."
+            exit 1
+          fi
+          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> "$GITHUB_ENV"
+          echo "[+] libclang dir: $LIBCLANG_DIR"
 
           echo "[+] Tool versions:"
           "$RUST_SYSROOT/bin/rustc" --version
           "$GITHUB_WORKSPACE/bindgen-bin/bindgen" --version
+          LIBCLANG_PATH="$LIBCLANG_DIR" "$GITHUB_WORKSPACE/bindgen-bin/bindgen" --version
       - name: Download and extract Neutron Clang (06092026)
         shell: bash
         run: |
@@ -136,7 +165,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-v1
+          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-v2
           restore-keys: |
             ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-
             ccache-${{ inputs.codename }}-sidharthify-6.12-clang-
@@ -183,11 +212,25 @@ jobs:
           clone_kernel &
 
           # SuSFS upstream dari simonpunk (branch gki-android16-6.12)
-          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-android16-6.12" susfs4ksu &
+          # Di-pin ke commit 9c9f19d: inilah versi yang cocok dengan
+          # patches/50_add_susfs_in_gki-android16-6.12-sidharthify.patch
+          # (commit 415d955 men-sync patch ke 9c9f19d).
+          # Tanpa pin, branch HEAD bergerak dan kombinasi patch+lib bisa tidak
+          # konsisten -> build rusak tanpa peringatan.
+          SUSFS_COMMIT="9c9f19d8395693327c78df36569b44e94c187b8a"
+          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags \
+            https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-android16-6.12" susfs4ksu &
 
           for pid in $(jobs -p); do
             wait "$pid"
           done
+
+          # Fetch commit target bila tidak ikut dalam shallow clone, lalu checkout.
+          if ! git -C susfs4ksu cat-file -e "${SUSFS_COMMIT}^{commit}" 2>/dev/null; then
+            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
+          fi
+          git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          echo "[+] susfs4ksu pinned at $(git -C susfs4ksu rev-parse HEAD)"
 
       - name: Record Upstream SHAs
         shell: bash
@@ -219,10 +262,13 @@ jobs:
                   return "unknown"
 
           config = os.environ.get("CONFIG", "android_kernel_google_gs201")
+          # susfs4ksu & kernel tree sudah ada di disk (di-pin / di-clone di step sebelumnya),
+          # jadi pakai HEAD lokal. KernelSU-Next baru di-clone setelah step ini, jadi
+          # masih memakai ls-remote (nilai yang akan di-clone).
           shas = {
               "kernel_tree_sidharthify_6.12": local_head(config),
               "KernelSU-Next_pershoot": ls_remote("https://github.com/pershoot/KernelSU-Next.git", "refs/heads/dev-susfs"),
-              "susfs4ksu_simonpunk_6.12": ls_remote("https://gitlab.com/simonpunk/susfs4ksu.git", "refs/heads/gki-android16-6.12"),
+              "susfs4ksu_simonpunk_6.12": local_head("susfs4ksu"),
               "nomount_dev": ls_remote("https://github.com/maxsteeel/nomount.git", "refs/heads/dev"),
           }
           with open("upstream-shas.json", "w") as f:
@@ -288,7 +334,18 @@ jobs:
             ln -sf ../uapi KernelSU-Next/kernel/uapi 2>/dev/null || true
 
             echo "[+] Menerapkan patch KernelSU-Next hook build..."
-            patch -p1 -d KernelSU-Next < "$GITHUB_WORKSPACE/patches/02_ksun_sultan.patch" || true
+            # Patch ini hanya menambah subdir-ccflags-y + memperbaiki endif KPROBES.
+            # Jangan di-`|| true`: bila upstream Kbuild berubah, kita ingin tahu di sini
+            # (dengan fuzz besar) daripada gagal jauh di tahap compile.
+            if ! patch -p1 -d KernelSU-Next < "$GITHUB_WORKSPACE/patches/02_ksun_sultan.patch"; then
+              echo "::error::Patch 02_ksun_sultan.patch gagal — upstream KernelSU-Next/Kbuild berubah?"
+              exit 1
+            fi
+            if grep -q "subdir-ccflags-y.*KernelSU-Next" KernelSU-Next/kernel/Kbuild; then
+              echo "[+] subdir-ccflags-y terpasang di kernel/Kbuild."
+            else
+              echo "::warning::subdir-ccflags-y tidak ditemukan di kernel/Kbuild (hunk hanya fuzz)."
+            fi
           fi
           if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
             sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -370,7 +427,19 @@ jobs:
           KERNEL_DIR="$(pwd)"
           curl -fsSL --retry 3 https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s dev
           actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
-          [ ! -L "$KERNEL_DIR/fs/nomount" ] && exit 1
+          # setup.sh membuat symlink fs/nomount -> NoMount/kernel/src.
+          # Cek harus positif: symlink ADA = sukses. Versi lama memakai
+          # `[ ! -L ... ] && exit 1` yang justru menggagalkan step saat setup BERHASIL.
+          if [ ! -L "$KERNEL_DIR/fs/nomount" ]; then
+            echo "::error::Symlink fs/nomount tidak dibuat oleh setup.sh NoMount."
+            ls -la "$KERNEL_DIR/fs/" | grep -i nomount || true
+            exit 1
+          fi
+          if ! grep -q "CONFIG_NOMOUNT" "$KERNEL_DIR/fs/Makefile"; then
+            echo "::error::fs/Makefile tidak mendaftarkan CONFIG_NOMOUNT."
+            exit 1
+          fi
+          echo "[+] NoMount terpasang: fs/nomount -> $(readlink "$KERNEL_DIR/fs/nomount")"
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
 
       - name: Build and Package NoMount Metamodule
@@ -410,11 +479,12 @@ jobs:
 
           DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
 
-          # ThinLTO standar GKI
-          sed -i 's/CONFIG_LTO_NONE=y/# CONFIG_LTO_NONE is not set/' "$DEFCONFIG" 2>/dev/null || true
+          # LTO tetap NONE (default gki_defconfig/gs201_defconfig). ThinLTO mematikan
+          # GENDWARFKSYMS -> mematikan CONFIG_RUST -> mematikan CONFIG_ASHMEM.
           sed -i 's/CONFIG_LTO_GCC=y/# CONFIG_LTO_GCC is not set/' "$DEFCONFIG" 2>/dev/null || true
           {
-            echo "CONFIG_LTO_CLANG_THIN=y"
+            echo "CONFIG_LTO_NONE=y"
+            echo "CONFIG_GENDWARFKSYMS=y"
             echo "CONFIG_TMPFS_XATTR=y"
             echo "CONFIG_TMPFS_POSIX_ACL=y"
             echo "CONFIG_IP_NF_TARGET_TTL=y"
@@ -499,7 +569,6 @@ jobs:
             echo "CONFIG_WIREGUARD=y"
             echo "CONFIG_TCP_CONG_ADVANCED=y"
             echo "CONFIG_TCP_CONG_BBR=y"
-            echo "CONFIG_DEFAULT_BBR=y"
             echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\""
             echo "CONFIG_NET_SCH_FQ=y"
             echo "CONFIG_NET_SCH_FQ_CODEL=y"
@@ -526,7 +595,6 @@ jobs:
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             {
               echo "CONFIG_KSU=y"
-              echo "CONFIG_KSU_SUSFS_SUS_SU=n"
               echo "CONFIG_KSU_SUSFS=y"
             } >> "$DEFCONFIG"
           else
@@ -568,41 +636,50 @@ jobs:
           # android16-6.12 builds ashmem in Rust, and Rust with MODVERSIONS needs
           # gendwarfksyms. These have to be on every make command line, or kbuild sees
           # the system rustc and quietly drops CONFIG_RUST.
-          export LIBCLANG_PATH="$GITHUB_WORKSPACE/clang/lib"
+          #
+          # LIBCLANG_PATH sudah di-set di step Setup Rust (libclang sistem). JANGAN
+          # diarahkan ke $GITHUB_WORKSPACE/clang/lib — Neutron tidak membawa libclang.so.
           export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/clang/lib:${LD_LIBRARY_PATH:-}"
-          TOOL_ARGS=(
+
+          # Array, bukan string: nilai ber-spasi (HOSTLDFLAGS) akan dipecah jadi
+          # beberapa argv bila diekspansi lewat `make $MAKE_ARGS` tanpa quote.
+          MAKE_ARGS=(
+            LLVM=1
+            LLVM_IAS=1
+            CROSS_COMPILE=aarch64-linux-gnu-
+            WERROR=0
             RUSTC="${RUSTC_PATH}"
             HOSTRUSTC="${RUSTC_PATH}"
             BINDGEN="${BINDGEN_PATH}"
             HOSTCFLAGS="-I/usr/include"
             HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/usr/lib/x86_64-linux-gnu"
           )
-
-          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0 ${TOOL_ARGS[*]}"
           rm -f .config
 
           # 1. Defconfig dasar
-          make $MAKE_ARGS -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          make "${MAKE_ARGS[@]}" -j"$(nproc --all)" ${{ inputs.codename }}_defconfig
 
-          CONFIG_FILE="out/.config"
-          if [ ! -f "$CONFIG_FILE" ]; then
-            CONFIG_FILE=".config"
-          fi
+          CONFIG_FILE=".config"
 
-          # 2. Injeksi mutlak konfigurasi ke target config aktif
+          # 2. Injeksi konfigurasi ke .config
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             ./scripts/config --file "$CONFIG_FILE" \
               -e CONFIG_KSU \
-              -e CONFIG_KSU_SUSFS \
-              -d CONFIG_KSU_SUSFS_SUS_SU
+              -e CONFIG_KSU_SUSFS
           else
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_KSU dilewati."
           fi
+          # LTO dibiarkan LTO_NONE seperti gki_defconfig/gs201_defconfig.
+          # ThinLTO mematikan GENDWARFKSYMS (depends on !LTO), yang lalu mematikan
+          # CONFIG_RUST (depends on !MODVERSIONS || GENDWARFKSYMS) dan berantai ke
+          # CONFIG_ASHMEM (depends on SHMEM && RUST).
           ./scripts/config --file "$CONFIG_FILE" \
             -d CONFIG_WERROR \
             -d CONFIG_LTO_GCC \
-            -d CONFIG_LTO_NONE \
-            -e CONFIG_LTO_CLANG_THIN \
+            -d CONFIG_LTO_CLANG_FULL \
+            -d CONFIG_LTO_CLANG_THIN \
+            -e CONFIG_LTO_NONE \
+            -e CONFIG_GENDWARFKSYMS \
             -e CONFIG_RUST \
             -e CONFIG_ASHMEM \
             -m CONFIG_ANDROID_BINDER_IPC_RUST \
@@ -620,17 +697,13 @@ jobs:
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) sebelum olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
 
-          if [ "$CONFIG_FILE" != ".config" ]; then
-            rm -f .config
-          fi
-
-          make $MAKE_ARGS olddefconfig 2>&1 | tee /tmp/olddefconfig.log
+          make "${MAKE_ARGS[@]}" olddefconfig 2>&1 | tee /tmp/olddefconfig.log
 
           echo "=== CONFIG_KSU (& status KPROBES/MODULES) setelah olddefconfig ==="
           grep -E "CONFIG_(KSU|KPROBES|KRETPROBES|MODULES|INTEGRATE_MODULES)" "$CONFIG_FILE" || true
 
-          grep -q "^CONFIG_LTO_CLANG_THIN=y" "$CONFIG_FILE" || {
-            echo "::warning::CONFIG_LTO_CLANG_THIN tidak aktif setelah olddefconfig, memeriksa status LTO..."
+          grep -q "^CONFIG_LTO_NONE=y" "$CONFIG_FILE" || {
+            echo "::warning::CONFIG_LTO_NONE tidak aktif setelah olddefconfig, memeriksa status LTO..."
             grep "CONFIG_LTO" "$CONFIG_FILE" || true
           }
 
@@ -652,7 +725,7 @@ jobs:
           if ! grep -q "^CONFIG_NOMOUNT=y" "$CONFIG_FILE"; then
             echo "::warning::CONFIG_NOMOUNT tidak aktif, menginjeksi ulang..."
             ./scripts/config --file "$CONFIG_FILE" -e CONFIG_NOMOUNT
-            make $MAKE_ARGS olddefconfig
+            make "${MAKE_ARGS[@]}" olddefconfig
           fi
           if grep -q "^CONFIG_NOMOUNT=y" "$CONFIG_FILE"; then
             echo "[+] CONFIG_NOMOUNT aktif (=y)."
@@ -660,25 +733,39 @@ jobs:
             echo "::error::CONFIG_NOMOUNT gagal diaktifkan!"
             MISSING=1
           fi
+
           echo "========== Cek CONFIG_RUST & CONFIG_ASHMEM setelah olddefconfig =========="
-          grep -E "CONFIG_(RUST|ASHMEM|ANDROID_BINDER_IPC_RUST)" "$CONFIG_FILE" || true
+          grep -E "CONFIG_(RUST|ASHMEM|ANDROID_BINDER_IPC_RUST|GENDWARFKSYMS|LTO)" "$CONFIG_FILE" || true
+          # Ashmem 6.12 dibangun dari Rust, jadi RUST wajib benar-benar aktif.
+          # Rantai dependensi: RUST <- GENDWARFKSYMS <- !LTO, dan ASHMEM <- RUST.
+          if ! grep -q "^CONFIG_RUST=y" "$CONFIG_FILE"; then
+            echo "::error::CONFIG_RUST tidak aktif — ashmem akan hilang. Cek bindgen/rustc di /tmp/olddefconfig.log:"
+            grep -iE "rust|bindgen" /tmp/olddefconfig.log | tail -30 || true
+            MISSING=1
+          fi
+          if ! grep -q "^CONFIG_ASHMEM=y" "$CONFIG_FILE"; then
+            echo "::error::CONFIG_ASHMEM tidak aktif (butuh CONFIG_RUST=y)."
+            MISSING=1
+          fi
+          if ! grep -q "^CONFIG_GENDWARFKSYMS=y" "$CONFIG_FILE"; then
+            echo "::error::CONFIG_GENDWARFKSYMS tidak aktif (butuh !LTO) — Rust+MODVERSIONS akan gagal."
+            MISSING=1
+          fi
 
           if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
             echo "::warning::CONFIG_KALLSYMS_ALL tidak aktif, menginjeksi langsung ke $CONFIG_FILE..."
             ./scripts/config --file "$CONFIG_FILE" -e CONFIG_DEBUG_KERNEL -e CONFIG_KALLSYMS -e CONFIG_KALLSYMS_ALL
-            make $MAKE_ARGS olddefconfig
+            make "${MAKE_ARGS[@]}" olddefconfig
           fi
           if [ $MISSING -eq 1 ]; then
-            grep -i "ksu" /tmp/olddefconfig.log || true
+            grep -iE "ksu|rust|bindgen|ashmem" /tmp/olddefconfig.log | tail -50 || true
             exit 1
           fi
 
-          make $MAKE_ARGS syncconfig
-
           # 3. Kompilasi Paralel
-          make $MAKE_ARGS LOCALVERSION_AUTO=0 -j$(nproc --all) Image.lz4 dtbs || {
+          make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j"$(nproc --all)" Image.lz4 dtbs || {
             echo "::error::Build paralel gagal. Melacak via single-thread:"
-            make $MAKE_ARGS LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
+            make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
             exit 1
           }
 
@@ -736,15 +823,19 @@ jobs:
         if: ${{ always() }}
         shell: bash
         run: |
+          ZIP_NAME="${ZIP_NAME:-<tidak terbentuk>}"
+          ZIP_SHA="${ZIP_SHA:-<tidak tersedia>}"
           cat << EOF >> "$GITHUB_STEP_SUMMARY"
           ### 🚀 Build Summary: ${{ inputs.codename }} 6.12 (${{ matrix.variant }}) [Clang]
           | Komponen | Status / Nilai |
           |---|---|
           | **Kernel Version** | `Linux 6.12 (Sidharthify)` |
           | **Compiler** | `Neutron Clang 06092026` |
+          | **LTO** | `LTO_NONE (Rust/ashmem aktif)` |
           | **Variant** | `${{ matrix.variant }}` |
-          | **Artifact Name** | `${{ env.ZIP_NAME }}` |
-          | **SHA-256** | \`${{ env.ZIP_SHA }}\` |
+          | **Job Status** | `${{ job.status }}` |
+          | **Artifact Name** | `${ZIP_NAME}` |
+          | **SHA-256** | \`${ZIP_SHA}\` |
           EOF
 
       - name: Fetch Manager APK
@@ -766,11 +857,22 @@ jobs:
           repo = "KernelSU-Next/KernelSU-Next"
 
           try:
-              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=1", headers=headers)
+              # Ambil beberapa rilis: yang terbaru bisa saja pre-release / tanpa aset.
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=10", headers=headers)
               with urllib.request.urlopen(req, timeout=15) as resp:
                   releases = json.loads(resp.read().decode("utf-8"))
-              if releases:
-                  assets = releases[0].get("assets", [])
+              target = None
+              for rel in releases:
+                  if rel.get("draft") or rel.get("prerelease"):
+                      continue
+                  if any(a["name"].endswith(".apk") for a in rel.get("assets", [])):
+                      target = rel
+                      break
+              if target is None:
+                  print(f"[!] Warning: tidak ada rilis stabil berisi .apk di {repo}")
+              else:
+                  print(f"[+] Menggunakan rilis {target.get('tag_name')}")
+                  assets = target.get("assets", [])
                   apks = [a for a in assets if a["name"].endswith(".apk")]
                   for a in apks:
                       print(f"[+] Downloading {a['name']} from {repo}...")
@@ -798,11 +900,12 @@ jobs:
       - name: Upload NoMount Metamodule Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NoMount-Metamodule-6.12-clang
+          # Nama wajib unik per matrix.variant: job matrix berjalan paralel dan
+          # upload-artifact v4 menolak/ menimpa artefak dengan nama sama.
+          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
           path: |
             ${{ github.workspace }}/NoMount*.zip
             ${{ github.workspace }}/NoMount*.sha256
-          overwrite: true
 
       - name: Upload Manager APK Artifact
         if: ${{ matrix.variant == 'KernelSU-Next' }}

@@ -45,6 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Rilis hanya jika semua job yang benar-benar jalan sukses. Job yang di-skip
+    # (kernel_version tidak dipilih) bernilai 'skipped' dan tidak menghalangi.
     if: |
       always() &&
       contains(needs.*.result, 'success') &&
@@ -97,8 +99,25 @@ jobs:
 
       - name: Prepare Release Assets
         run: |
+          set -euo pipefail
           mkdir -p release-assets
-          find ./downloaded-artifacts -type f -exec cp -f {} release-assets/ \;
+          # Artefak di-flatten ke satu direktori. Nama seperti NoMount.zip muncul
+          # dari setiap matrix variant, jadi jangan blind-overwrite: simpan yang
+          # identik sekali saja, dan beri prefiks artefak bila isinya berbeda.
+          find ./downloaded-artifacts -type f -print0 | while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            parent="$(basename "$(dirname "$f")")"
+            dest="release-assets/$base"
+            if [ -f "$dest" ]; then
+              if cmp -s "$f" "$dest"; then
+                echo "[=] identik, dilewati: $base (dari $parent)"
+                continue
+              fi
+              dest="release-assets/${parent}--${base}"
+              echo "[!] nama bentrok, disimpan sebagai $(basename "$dest")"
+            fi
+            cp -f "$f" "$dest"
+          done
           echo "Files prepared for release:"
           ls -la release-assets/
 
