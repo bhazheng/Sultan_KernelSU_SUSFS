@@ -238,14 +238,13 @@ jobs:
             echo "[*] Partial clone ditolak server — fallback ke shallow penuh." >&2
             git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/sidharthify/android_kernel_google_gs201 -b "$KERNEL_BRANCH" android_kernel_google_gs201
           }
-          # AnyKernel3 untuk 6.12: branch gki-2.0, BUKAN sultan-gs201.
-          # sultan-gs201 adalah AK3 milik kernel 6.1 Sultan (dipakai sultan-clang.yml):
-          # ak3-core.sh-nya lebih tua (~35 KB vs ~41 KB) dan anykernel.sh-nya
-          # melakukan `rm -f Image.lz4` + reset_ak lalu split_boot pada
-          # vendor_kernel_boot, sehingga kernel ikut terhapus sebelum partisi dtb
-          # ditulis. gki-2.0 mendukung 6.12 (cek versi eksplisit) dan menangani
-          # dtb -> vendor_kernel_boot otomatis lewat write_boot.
-          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/TheWildJames/AnyKernel3.git -b "gki-2.0" AnyKernel3 &
+          # AnyKernel3 sama seperti build 6.1: gs201 adalah perangkat yang sama,
+          # jadi layout partisi (boot + vendor_kernel_boot untuk dtb) tidak
+          # berubah antar versi kernel. Branch sultan-gs201 sudah menangani
+          # Image.lz4 dan menghapusnya setelah flash boot (commit b71ca5d
+          # "Remove Image.lz4 after boot flash") supaya kernel tidak ikut
+          # ditulis ke vendor_kernel_boot -- hanya dtb yang masuk ke sana.
+          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags https://github.com/TheWildJames/AnyKernel3.git -b "sultan-${{ inputs.codename }}" AnyKernel3 &
 
           clone_kernel &
 
@@ -901,75 +900,22 @@ jobs:
             exit 1
           fi
 
-          # Tulis anykernel.sh untuk gs201 6.12 di atas template gki-2.0.
-          # Template gki-2.0 sengaja generik (do.devicecheck=0, supported.versions
-          # kosong) karena dipakai untuk banyak device. Untuk build gs201 kita
-          # nyalakan kembali proteksi device + versi Android, kalau tidak zip ini
-          # bisa ter-flash ke perangkat yang salah tanpa peringatan.
-          #
-          # write_boot() di ak3-core.sh gki-2.0 memindahkan dtb ke
-          # vendor_kernel_boot-files secara otomatis (hdr_v4 / init_boot), jadi
-          # anykernel.sh cukup memanggil split_boot + write_boot.
-          cat > ../AnyKernel3/anykernel.sh <<'ANYKERNEL_EOF'
-          ### AnyKernel3 Ramdisk Mod Script
-          ## osm0sis @ xda-developers
+          # Sama seperti build 6.1: anykernel.sh dipakai apa adanya dari branch
+          # sultan-gs201, hanya versi Android dan nama kernel yang disesuaikan.
+          # Urutan flash di sana sudah benar untuk gs201:
+          #   boot            -> split_boot; flash_boot  (Image.lz4 masuk boot)
+          #   rm Image.lz4    -> agar kernel tidak ikut ditulis ke partisi berikut
+          #   vendor_kernel_boot -> split_boot; flash_boot (hanya dtb)
+          sed -i 's/supported.versions=.*/supported.versions=14-17/' ../AnyKernel3/anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=Sidharthify 6.12 Kernel for Pixel 7 Series (gs201)/' ../AnyKernel3/anykernel.sh
 
-          ### AnyKernel setup
-          # global properties
-          properties() { '
-          kernel.string=Sidharthify 6.12 Kernel for Pixel 7 / 7 Pro / 7a (gs201)
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=0
-          do.cleanup=1
-          do.cleanuponabort=0
-          do.check_boot_version=0
-          device.name1=cheetah
-          device.name2=panther
-          device.name3=lynx
-          supported.versions=14-17
-          supported.patchlevels=
-          supported.vendorpatchlevels=
-          keycheck.timeout=10
-          '; } # end properties
-
-
-          ### AnyKernel install
-          ## boot shell variables
-          block=boot
-          is_slot_device=auto
-          ramdisk_compression=auto
-          patch_vbmeta_flag=auto
-          no_magisk_check=1
-
-          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
-          . tools/ak3-core.sh
-
-          # boot install; write_boot() juga menangani vendor_boot/vendor_kernel_boot
-          # (dtb) dan vendor_dlkm/system_dlkm/dtbo bila partisinya ada.
-          split_boot
-
-          if [ -f "$SPLITIMG/ramdisk.cpio" ]; then
-              unpack_ramdisk
-              write_boot
-          else
-              flash_boot
-          fi
-          ANYKERNEL_EOF
-
-          # Sanity check: template harus benar-benar tertimpa dan memuat identitas gs201.
-          for expect in "device.name1=cheetah" "device.name2=panther" "device.name3=lynx" "supported.versions=14-17" "write_boot"; do
+          # Pastikan sed benar-benar mendarat dan identitas device tetap utuh.
+          for expect in "supported.versions=14-17" "device.name1=cheetah" "device.name2=panther" "device.name3=lynx"; do
             grep -q "$expect" ../AnyKernel3/anykernel.sh || {
-              echo "::error::anykernel.sh tidak memuat '$expect' — penulisan template gagal."
+              echo "::error::anykernel.sh tidak memuat '$expect' setelah sed."
               exit 1
             }
           done
-          # Pastikan tidak ada sisa urutan lama 6.1 yang menghapus Image.lz4 sebelum dtb ditulis.
-          if grep -q 'rm -f "$AKHOME/Image.lz4"' ../AnyKernel3/anykernel.sh; then
-            echo "::error::anykernel.sh masih memuat urutan 6.1 (rm Image.lz4 + reset_ak)."
-            exit 1
-          fi
-          echo "[+] anykernel.sh gs201 6.12 siap (devicecheck + supported.versions aktif)."
 
           cd ../AnyKernel3
           ZIP_NAME="${{ matrix.variant }}-${{ inputs.codename }}-6.12-Sidharthify-clang.zip"
