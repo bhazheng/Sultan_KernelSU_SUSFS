@@ -927,7 +927,7 @@ jobs:
           device.name1=cheetah
           device.name2=panther
           device.name3=lynx
-          supported.versions=14-16
+          supported.versions=14-17
           supported.patchlevels=
           supported.vendorpatchlevels=
           keycheck.timeout=10
@@ -958,7 +958,7 @@ jobs:
           ANYKERNEL_EOF
 
           # Sanity check: template harus benar-benar tertimpa dan memuat identitas gs201.
-          for expect in "device.name1=cheetah" "device.name2=panther" "device.name3=lynx" "supported.versions=14-16" "write_boot"; do
+          for expect in "device.name1=cheetah" "device.name2=panther" "device.name3=lynx" "supported.versions=14-17" "write_boot"; do
             grep -q "$expect" ../AnyKernel3/anykernel.sh || {
               echo "::error::anykernel.sh tidak memuat '$expect' — penulisan template gagal."
               exit 1
