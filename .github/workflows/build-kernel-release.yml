@@ -95,6 +95,7 @@ jobs:
         **Modules & Tooling:**
         - SuSFS Module: https://github.com/sidex15/ksu_module_susfs
         - NoMount Metamodule: attached `NoMount.zip` (universal)
+        - Raw kernel: `*-Image.lz4` per variant (+ `.sha256`) for manual boot.img repacking
         - KernelSU-Next Tree: https://github.com/pershoot/KernelSU-Next/tree/dev-susfs
         - Manager APK: https://github.com/KernelSU-Next/KernelSU-Next
         **Features Included:**

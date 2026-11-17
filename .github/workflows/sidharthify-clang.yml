@@ -1067,6 +1067,13 @@ jobs:
           echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
           echo "ZIP_SHA=$(cat ${ZIP_NAME}.sha256 | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
+          # Image.lz4 mentah juga dirilis (untuk yang flash via boot.img sendiri / magiskboot).
+          # Nama unik per kernel+varian: rilis mem-flatten semua artefak ke satu direktori.
+          IMG_NAME="${ZIP_NAME%.zip}-Image.lz4"
+          cp AnyKernel3/Image.lz4 "$IMG_NAME"
+          sha256sum "$IMG_NAME" > "${IMG_NAME}.sha256"
+          echo "IMG_NAME=$IMG_NAME" >> "$GITHUB_ENV"
+
       - name: Generate Workflow Summary
         if: ${{ always() }}
         shell: bash
@@ -1189,6 +1196,7 @@ jobs:
           path: |
             ${{ github.workspace }}/*.zip
             ${{ github.workspace }}/*.sha256
+            ${{ github.workspace }}/*-Image.lz4
             !${{ github.workspace }}/*.apk
             !${{ github.workspace }}/NoMount*.zip
             !${{ github.workspace }}/NoMount*.sha256
