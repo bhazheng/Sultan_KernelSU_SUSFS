@@ -30,7 +30,7 @@ on:
         type: boolean
         default: true
       rust_binder:
-        description: "Bangun Rust Binder built-in (CONFIG_ANDROID_BINDER_IPC_RUST=y). Aktif hanya dengan binder.impl=rust di cmdline; tanpa itu C binder tetap dipakai."
+        description: "Bangun juga rust_binder.ko (=m) dari build kernel yang sama dan unggah sebagai artefak. Dipakai hanya dengan binder.impl=rust di cmdline."
         required: false
         type: boolean
         default: false
@@ -50,7 +50,7 @@ on:
         type: boolean
         default: true
       rust_binder:
-        description: "Bangun Rust Binder built-in (CONFIG_ANDROID_BINDER_IPC_RUST=y). Aktif hanya dengan binder.impl=rust di cmdline; tanpa itu C binder tetap dipakai."
+        description: "Bangun juga rust_binder.ko (=m) dari build kernel yang sama dan unggah sebagai artefak. Dipakai hanya dengan binder.impl=rust di cmdline."
         required: false
         type: boolean
         default: false
@@ -811,15 +811,6 @@ jobs:
             echo "CONFIG_DM_VERITY=y"
           } >> "$DEFCONFIG"
 
-          # Rust Binder built-in: rust_binder.ko di system_dlkm/vendor_dlkm YAAP hanya bisa di-link ke
-          # kernel stok YAAP (hash crate Rust berbeda per build), dan modul yang dimuat setelah binderfs
-          # di-mount jatuh kembali ke C binder. Built-in (=y) mengambil alih binderfs saat initcall bila
-          # cmdline berisi binder.impl=rust; tanpa parameter itu C binder (tetap =y) yang dipakai.
-          if [ "$RUST_BINDER" = "true" ]; then
-            echo "[+] rust_binder=true -> CONFIG_ANDROID_BINDER_IPC_RUST=y"
-            echo "CONFIG_ANDROID_BINDER_IPC_RUST=y" >> "$DEFCONFIG"
-          fi
-
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             {
@@ -928,9 +919,6 @@ jobs:
           else
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_KSU dilewati."
           fi
-          # Rust Binder: =m (default, seperti GKI) atau =y bila input rust_binder=true. Flag ini juga
-          # menimpa baris defconfig, jadi harus mengikuti input yang sama.
-          if [ "$RUST_BINDER" = "true" ]; then RUST_BINDER_FLAG=-e; else RUST_BINDER_FLAG=-m; fi
           # LTO dibiarkan LTO_NONE seperti gki_defconfig/gs201_defconfig.
           # ThinLTO mematikan GENDWARFKSYMS (depends on !LTO), yang lalu mematikan
           # CONFIG_RUST (depends on !MODVERSIONS || GENDWARFKSYMS) dan berantai ke
@@ -944,7 +932,7 @@ jobs:
             -e CONFIG_GENDWARFKSYMS \
             -e CONFIG_RUST \
             -e CONFIG_ASHMEM \
-            "$RUST_BINDER_FLAG" CONFIG_ANDROID_BINDER_IPC_RUST \
+            -m CONFIG_ANDROID_BINDER_IPC_RUST \
             -e CONFIG_NTSYNC \
             -e CONFIG_NOMOUNT \
             -e CONFIG_THREAD_INFO_IN_TASK \
@@ -1024,8 +1012,11 @@ jobs:
             MISSING=1
           fi
           if [ "$RUST_BINDER" = "true" ]; then
-            if ! grep -q "^CONFIG_ANDROID_BINDER_IPC_RUST=y" "$CONFIG_FILE"; then
-              echo "::error::rust_binder=true tetapi CONFIG_ANDROID_BINDER_IPC_RUST bukan =y (butuh RUST && MMU && NET)."
+            # Harus =m: built-in (=y) bersama C binder gagal link (tracepoint binder_* terdefinisi
+            # ganda di binder.o dan rust_binder_events.o, run 44032270252). Sebagai modul, Rust Binder
+            # menghapus event C binder saat mengambil alih (binder_remove_trace_events).
+            if ! grep -q "^CONFIG_ANDROID_BINDER_IPC_RUST=m" "$CONFIG_FILE"; then
+              echo "::error::rust_binder=true tetapi CONFIG_ANDROID_BINDER_IPC_RUST bukan =m (butuh RUST && MMU && NET)."
               MISSING=1
             fi
             # C binder harus tetap ada: dialah yang dipakai bila binder.impl=rust tidak di-set.
@@ -1072,6 +1063,29 @@ jobs:
             grep -E 'error:|undefined (reference|symbol)|No rule to make target' /tmp/build.log \
               | grep -v '^make' | awk '!seen[$0]++' | head -10 | while IFS= read -r l; do echo "::error::$l"; done || true
             exit 1
+          fi
+
+          # rust_binder.ko dari build ini: nama simbol Rust membawa hash crate per build, jadi
+          # rust_binder.ko YAAP (system_dlkm) tidak bisa di-link ke kernel ini. Port memuatnya lewat
+          # kcmdlinemodprobe AOSP (/system/lib/modules, early-init) bila cmdline berisi binder.impl=rust.
+          if [ "$RUST_BINDER" = "true" ]; then
+            if ! make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j"$(nproc --all)" drivers/android/binder/rust_binder.ko 2>&1 | tee /tmp/rust_binder.log; then
+              grep -nE 'error:|undefined|\*\*\* \[' /tmp/rust_binder.log | head -20 || true
+              echo "::error::rust_binder.ko gagal dibangun."
+              exit 1
+            fi
+            KO="$(find out -name rust_binder.ko -path '*drivers/android/binder/*' | head -1)"
+            if [ -z "$KO" ] || [ ! -s "$KO" ]; then
+              echo "::error::rust_binder.ko tidak ditemukan setelah build."
+              exit 1
+            fi
+            KO_OUT="$GITHUB_WORKSPACE/${{ matrix.variant }}-${{ inputs.codename }}-6.12-rust_binder.ko"
+            cp "$KO" "$KO_OUT"
+            if [ -x "$GITHUB_WORKSPACE/clang/bin/llvm-strip" ]; then
+              "$GITHUB_WORKSPACE/clang/bin/llvm-strip" --strip-debug "$KO_OUT"
+            fi
+            strings "$KO_OUT" | grep -E "^(vermagic|name)=" || true
+            sha256sum "$KO_OUT"
           fi
 
           ccache -s || true
@@ -1267,6 +1281,7 @@ jobs:
             ${{ github.workspace }}/*.zip
             ${{ github.workspace }}/*.sha256
             ${{ github.workspace }}/*-Image.lz4
+            ${{ github.workspace }}/*-rust_binder.ko
             !${{ github.workspace }}/*.apk
             !${{ github.workspace }}/NoMount*.zip
             !${{ github.workspace }}/NoMount*.sha256

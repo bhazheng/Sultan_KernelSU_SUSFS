@@ -37,7 +37,7 @@ on:
         default: true
         type: boolean
       rust_binder:
-        description: "6.12: Rust Binder built-in (CONFIG_ANDROID_BINDER_IPC_RUST=y); dipakai hanya dengan binder.impl=rust di cmdline."
+        description: "6.12: bangun juga rust_binder.ko (=m) dari build kernel yang sama; dipakai hanya dengan binder.impl=rust di cmdline."
         required: false
         default: false
         type: boolean
