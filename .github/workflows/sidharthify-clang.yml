@@ -928,6 +928,9 @@ jobs:
           else
             echo "[*] Varian ${{ matrix.variant }} — injeksi CONFIG_KSU dilewati."
           fi
+          # Rust Binder: =m (default, seperti GKI) atau =y bila input rust_binder=true. Flag ini juga
+          # menimpa baris defconfig, jadi harus mengikuti input yang sama.
+          if [ "$RUST_BINDER" = "true" ]; then RUST_BINDER_FLAG=-e; else RUST_BINDER_FLAG=-m; fi
           # LTO dibiarkan LTO_NONE seperti gki_defconfig/gs201_defconfig.
           # ThinLTO mematikan GENDWARFKSYMS (depends on !LTO), yang lalu mematikan
           # CONFIG_RUST (depends on !MODVERSIONS || GENDWARFKSYMS) dan berantai ke
@@ -941,7 +944,7 @@ jobs:
             -e CONFIG_GENDWARFKSYMS \
             -e CONFIG_RUST \
             -e CONFIG_ASHMEM \
-            -m CONFIG_ANDROID_BINDER_IPC_RUST \
+            "$RUST_BINDER_FLAG" CONFIG_ANDROID_BINDER_IPC_RUST \
             -e CONFIG_NTSYNC \
             -e CONFIG_NOMOUNT \
             -e CONFIG_THREAD_INFO_IN_TASK \
