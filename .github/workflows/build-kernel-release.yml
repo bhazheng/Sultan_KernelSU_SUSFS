@@ -1,8 +1,14 @@
 name: Build and Release GS201 Kernels
 
+# Least privilege: job build hanya membaca repo. Hanya job trigger-release yang butuh
+# contents: write (membuat/mengubah rilis) dan mendeklarasikannya sendiri di bawah.
 permissions:
-  contents: write  # Allow writing to repository contents (for pushing tags)
-  actions: write   # Allows triggering actions
+  contents: read
+
+# Satu rilis "latest" pada satu waktu: dua run bersamaan akan saling menimpa aset rilis.
+concurrency:
+  group: release-latest
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -25,6 +31,12 @@ on:
           - '["KernelSU-Next"]'
           - '["KernelSU-Next", "NoRoot"]'
           - '["NoRoot"]'
+      debug_panic:
+        description: "6.12: panic on oops / hung task / soft lockup (capture ramoops untuk bring-up). Matikan untuk rilis daily-driver."
+        required: false
+        default: true
+        type: boolean
+
 jobs:
   build-kernel-gs201-612-clang:
     if: ${{ inputs.kernel_version == 'both' || inputs.kernel_version == '6.12' }}
@@ -33,6 +45,9 @@ jobs:
     with:
       codename: "gs201"
       variants: ${{ inputs.variants }}
+      debug_panic: ${{ inputs.debug_panic }}
+      # NoMount metamodule dibangun SEKALI per run: oleh 6.12 bila ikut dibangun, selain itu oleh 6.1.
+      build_nomount: true
 
   build-kernel-gs201-61-clang:
     if: ${{ inputs.kernel_version == 'both' || inputs.kernel_version == '6.1' }}
@@ -41,6 +56,8 @@ jobs:
     with:
       codename: "gs201"
       variants: ${{ inputs.variants }}
+      build_nomount: ${{ inputs.kernel_version == '6.1' }}
+
   trigger-release:
     runs-on: ubuntu-latest
     permissions:
@@ -72,7 +89,7 @@ jobs:
         - 6.1: https://github.com/bhazheng/android_kernel_google_tensynos (branch android14-6.1.145)
         
         **Variants:**
-        - `KernelSU-Next`: Root enabled with SuSFS v2.3.0 inline hooks + NoMount metamodule.
+        - `KernelSU-Next`: Root enabled with SuSFS v2.4.0 inline hooks + NoMount metamodule.
         - `NoRoot`: Clean performance kernel with NoMount + BBR/BBRv3 (no root).
         
         **Modules & Tooling:**
@@ -82,7 +99,7 @@ jobs:
         - Manager APK: https://github.com/KernelSU-Next/KernelSU-Next
         **Features Included:**
         [+] KernelSU-Next (pershoot dev-susfs)
-        [+] SuSFS v2.3.0 Inline Hooks
+        [+] SuSFS v2.4.0 Inline Hooks
         [+] NoMount VFS Redirection Framework
         [+] BBR / BBRv3 TCP Congestion Control (FQ/CAKE)
         [+] NTSync (Wine/Proton gaming synchronization)
@@ -101,9 +118,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Artefak di-flatten ke satu direktori. Nama seperti NoMount.zip muncul
-          # dari setiap matrix variant, jadi jangan blind-overwrite: simpan yang
-          # identik sekali saja, dan beri prefiks artefak bila isinya berbeda.
+          # Artefak di-flatten ke satu direktori. NoMount.zip kini hanya datang dari SATU job;
+          # pengaman ini tetap ada: jangan blind-overwrite, simpan file identik sekali saja,
+          # dan beri prefiks artefak bila isinya berbeda.
           find ./downloaded-artifacts -type f -print0 | while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             parent="$(basename "$(dirname "$f")")"
@@ -120,6 +137,14 @@ jobs:
           done
           echo "Files prepared for release:"
           ls -la release-assets/
+
+      # softprops/action-gh-release memperbarui rilis tetapi TIDAK memindahkan tag yang sudah ada:
+      # tag `latest` akan menunjuk commit lama selamanya. Pindahkan ke commit run ini.
+      - name: Move 'latest' tag to this commit
+        run: |
+          set -euo pipefail
+          git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$RELEASE_TAG"
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2

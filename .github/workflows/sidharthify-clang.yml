@@ -1,7 +1,6 @@
 name: Sidharthify (Clang)
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 on:
   workflow_dispatch:
@@ -20,6 +19,16 @@ on:
           - '["KernelSU-Next"]'
           - '["KernelSU-Next", "NoRoot"]'
           - '["NoRoot"]'
+      build_nomount:
+        description: "Build & upload NoMount metamodule (sekali, di job matrix pertama)"
+        required: false
+        type: boolean
+        default: true
+      debug_panic:
+        description: "Aktifkan panic on oops / hung task / soft lockup (capture ramoops untuk bring-up). Matikan untuk rilis daily-driver."
+        required: false
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       codename:
@@ -30,11 +39,31 @@ on:
         required: false
         type: string
         default: '["KernelSU-Next"]'
+      debug_panic:
+        description: "Aktifkan panic on oops / hung task / soft lockup (capture ramoops untuk bring-up). Matikan untuk rilis daily-driver."
+        required: false
+        type: boolean
+        default: true
+      build_nomount:
+        description: "Build & upload NoMount metamodule (sekali, di job matrix pertama)"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build-kernel-sidharthify-kernelsu-susfs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
+    env:
+      # Pin upstream. Patch di patches/ divalidasi (0 fuzz/0 offset/0 reject) terhadap SHA ini;
+      # bump SHA bersamaan dengan regenerasi patch. Harus SHA LENGKAP (40 hex): fetch-by-SHA
+      # tidak menerima singkatan. Pin menjaga build tetap reproducible walau upstream
+      # force-push (pershoot/KernelSU-Next dev-susfs pernah di-rebase).
+      SUSFS_COMMIT: "9b0b13f069673b9b07b713a5c66977de4d62b175"
+      KSUN_COMMIT: "39b15dead6fa806cb3582f866b081fa1d9e1c9e4"
+      # NoMount (maxsteeel/nomount): dulu mengikuti tip branch dev + menjalankan setup.sh mentah
+      # dari dev -> kode tak ter-review langsung masuk kernel. Kini setup.sh dan source di-pin.
+      NOMOUNT_PIN: "f83db94afa3e480584ee57045fc7f5efdde83040"
     strategy:
       fail-fast: false
       matrix:
@@ -43,14 +72,18 @@ jobs:
     steps:
       - name: Validate Inputs
         shell: bash
+        env:
+          # Lewat env, bukan interpolasi ${{ }} langsung di script (anti script-injection).
+          CODENAME: ${{ inputs.codename }}
         run: |
-          # Validasi awal: tree kernel sidharthify untuk gs201
-          case "${{ inputs.codename }}" in
+          # Validasi awal: tree kernel sidharthify hanya untuk gs201.
+          # Gagal cepat sebelum runner mengunduh toolchain bila codename salah.
+          case "$CODENAME" in
             gs201)
               echo "[+] Codename gs201 valid (tree sidharthify gs201-only)."
               ;;
             *)
-              echo "::error::Codename '${{ inputs.codename }}' tidak didukung! Tree kernel sidharthify hanya untuk gs201."
+              echo "::error::Codename '$CODENAME' tidak didukung! Tree kernel sidharthify hanya untuk gs201."
               exit 1
               ;;
           esac
@@ -58,12 +91,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Free Disk Space on Runner
+      - name: Free Disk Space on Runner (background)
         shell: bash
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift
-          sudo docker image prune --all --force
-          echo "[+] Disk space cleaned up"
+          # Dulu ~2 menit MEMBLOKIR job (run 40617356741: 1m53s / 2m13s) sebelum apa pun bisa jalan.
+          # Kini jalan di background, paralel dengan apt/toolchain/clone; step "Wait for disk
+          # cleanup" menunggu sebelum build (satu-satunya tahap yang butuh ruang besar).
+          # Proses background dari satu step tetap hidup hingga job selesai.
+          df -h / | tail -1
+          nohup sudo sh -c 'rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift; docker image prune --all --force' \
+            > /tmp/disk-cleanup.log 2>&1 &
+          echo $! > /tmp/disk-cleanup.pid
+          echo "[+] Disk cleanup dimulai di background (pid $(cat /tmp/disk-cleanup.pid))"
 
       - name: Install Essential Build Tools
         shell: bash
@@ -83,7 +122,9 @@ jobs:
           echo "[+] Setting up Rust 1.82.0 and bindgen for kernel Rust support (ashmem)..."
           rustup toolchain install 1.82.0 --profile minimal
           rustup default 1.82.0
-          rustup component add rust-src --toolchain 1.82.0
+          # rustfmt: kbuild memformat binding yang di-generate; tanpanya log berisi
+          # "error: 'rustfmt' is not installed" (6x di run 40617356741, non-fatal tapi menyesatkan).
+          rustup component add rust-src rustfmt --toolchain 1.82.0
           rustup target add aarch64-unknown-none --toolchain 1.82.0 2>/dev/null || true
 
           RUST_SYSROOT=$(rustc +1.82.0 --print sysroot)
@@ -96,8 +137,12 @@ jobs:
           # Arsip berisi satu direktori pembungkus, jadi --strip-components=1 wajib:
           # tanpa itu binary ada di bindgen-bin/bindgen-cli-x86_64-unknown-linux-gnu/bindgen
           mkdir -p "$GITHUB_WORKSPACE/bindgen-bin"
-          curl -fsSL https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.5/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz \
-            | tar -xJ --strip-components=1 -C "$GITHUB_WORKSPACE/bindgen-bin"
+          curl -fsSL -o /tmp/bindgen.tar.xz https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.5/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz
+          echo "b7e2321ee8c617f14ccc5b9f39b3a804db173ee217e924ad93ed16af6bc62b1d  /tmp/bindgen.tar.xz" | sha256sum -c --quiet - || {
+            echo "::error::Checksum bindgen 0.69.5 tidak cocok."
+            exit 1
+          }
+          tar -xJ --strip-components=1 -C "$GITHUB_WORKSPACE/bindgen-bin" -f /tmp/bindgen.tar.xz
           test -f "$GITHUB_WORKSPACE/bindgen-bin/bindgen" || {
             echo "::error::bindgen tidak ditemukan setelah ekstraksi (layout arsip berubah?)"
             ls -la "$GITHUB_WORKSPACE/bindgen-bin"
@@ -160,19 +205,20 @@ jobs:
           echo "Fetching Neutron Clang 06092026 (Neutron-Toolchains/clang-build-catalogue)..."
           mkdir -p $GITHUB_WORKSPACE/clang
           CLANG_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/06092026/neutron-clang-06092026.tar.zst"
+          CLANG_SHA256="531083928c8e37f6b31e324dbfd0b5a8323f989b1c57ff2c1368b889b5b1bd30"
           for i in 1 2 3; do
             echo "Attempt $i: $CLANG_URL"
             HTTP_CODE="$(curl -sSL -o /tmp/clang.tar.zst -w "%{http_code}" "$CLANG_URL" || true)"
             echo "HTTP code: $HTTP_CODE"
             if [ "$HTTP_CODE" = "200" ] && [ -s /tmp/clang.tar.zst ]; then
               if head -c 4 /tmp/clang.tar.zst | od -An -tx1 | grep -qi "28 b5 2f fd"; then
-                if tar -I zstd -tf /tmp/clang.tar.zst >/dev/null 2>&1; then
+                if echo "$CLANG_SHA256  /tmp/clang.tar.zst" | sha256sum -c --quiet - && tar -I zstd -tf /tmp/clang.tar.zst >/dev/null 2>&1; then
                   tar -I zstd -xf /tmp/clang.tar.zst -C $GITHUB_WORKSPACE/clang
                   rm -f /tmp/clang.tar.zst
                   echo "[+] Neutron Clang extracted successfully"
                   break
                 else
-                  echo "Arsip zst rusak, retry..." >&2
+                  echo "Checksum SHA-256 / arsip zst tidak valid, retry..." >&2
                 fi
               else
                 echo "File bukan zstd valid (awal):" >&2
@@ -196,13 +242,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-v2
+          key: ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-v2-${{ github.run_id }}
           restore-keys: |
             ccache-${{ inputs.codename }}-${{ matrix.variant }}-sidharthify-6.12-clang-
             ccache-${{ inputs.codename }}-sidharthify-6.12-clang-
 
+      # NoMount metamodule = userspace murni, identik untuk semua kernel & varian -> cukup SATU
+      # build + upload per run: hanya job matrix pertama, dan build-kernel-release.yml menyalakan
+      # build_nomount di satu workflow kernel saja.
       - name: Set up Zig Compiler
-        uses: jetsung/setup-zig@v0.0.4
+        if: ${{ inputs.build_nomount && strategy.job-index == 0 }}
+        uses: jetsung/setup-zig@ece60a5f01428e90311476245667dc49e3f84513 # v0.0.4
         with:
           version: 0.13.0
 
@@ -218,9 +268,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "[+] Cloning dependencies in parallel (shallow + partial)..."
+          # Branch dipatok EKSPLISIT ke 6.12-test: semua patch (SUSFS/KSU) divalidasi ke tree ini.
+          # Dulu otomatis pindah ke "6.12" bila branch itu muncul -> tree beda tanpa validasi patch.
           KERNEL_BRANCH="6.12-test"
           if git ls-remote --exit-code --heads https://github.com/sidharthify/android_kernel_google_gs201 6.12 >/dev/null 2>&1; then
-            KERNEL_BRANCH="6.12"
+            echo "::warning::Branch '6.12' kini ada di sidharthify/android_kernel_google_gs201, tetapi build tetap memakai 6.12-test (yang divalidasi patch). Validasi patch ke 6.12 lalu ubah KERNEL_BRANCH."
           fi
           echo "[+] Target kernel branch: $KERNEL_BRANCH (Sidharthify 6.12)"
 
@@ -248,84 +300,33 @@ jobs:
 
           clone_kernel &
 
-          # SuSFS upstream dari simonpunk (branch gki-android16-6.12)
-          # Di-pin ke commit 9c9f19d: inilah versi yang cocok dengan
-          # patches/50_add_susfs_in_gki-android16-6.12-sidharthify.patch
-          # (commit 415d955 men-sync patch ke 9c9f19d).
-          # Tanpa pin, branch HEAD bergerak dan kombinasi patch+lib bisa tidak
-          # konsisten -> build rusak tanpa peringatan.
-          SUSFS_COMMIT="9c9f19d8395693327c78df36569b44e94c187b8a"
-          git -c protocol.version=2 clone --depth=1 --single-branch --no-tags \
-            https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-android16-6.12" susfs4ksu &
+          # SuSFS upstream dari simonpunk (branch gki-android16-6.12), di-pin ke SUSFS_COMMIT
+          # (SuSFS v2.4.0) -- cocok dengan patches/50_add_susfs_in_gki-android16-6.12-sidharthify.patch
+          # dan dengan API v2.4.0 yang sudah dipanggil pershoot/KernelSU-Next dev-susfs
+          # (sus_path_uid_filter, priority_uid_filter). Tanpa pin, tip branch bergerak dan
+          # kombinasi patch+lib bisa tidak konsisten -> build rusak tanpa peringatan.
+          # Ambil commit PERSIS (bukan tip branch): init + fetch --depth=1 <sha> + checkout.
+          # Dicoba lagi 3x untuk gangguan jaringan; gagal keras bila SHA tidak ada/ditolak.
+          fetch_pinned() {
+            local url="$1" sha="$2" dir="$3" n=0
+            rm -rf "$dir"
+            git init -q "$dir" || return 1
+            git -C "$dir" remote add origin "$url" || return 1
+            until git -C "$dir" fetch -q --depth=1 origin "$sha"; do
+              n=$((n+1))
+              [ "$n" -lt 3 ] || { echo "::error::fetch $sha dari $url gagal setelah 3x." >&2; return 1; }
+              echo "retry $n/3 fetch $dir..." >&2
+              sleep 5
+            done
+            git -C "$dir" checkout -q --detach FETCH_HEAD || return 1
+            [ "$(git -C "$dir" rev-parse HEAD)" = "$sha" ] || { echo "::error::$dir tidak di $sha." >&2; return 1; }
+          }
+          fetch_pinned https://gitlab.com/simonpunk/susfs4ksu.git "$SUSFS_COMMIT" susfs4ksu &
 
           for pid in $(jobs -p); do
             wait "$pid"
           done
-
-          # Fetch commit target bila tidak ikut dalam shallow clone, lalu checkout.
-          if ! git -C susfs4ksu cat-file -e "${SUSFS_COMMIT}^{commit}" 2>/dev/null; then
-            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
-          fi
-          git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
           echo "[+] susfs4ksu pinned at $(git -C susfs4ksu rev-parse HEAD)"
-
-      - name: Record Upstream SHAs
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - << 'EOF'
-          import json, os, subprocess
-
-          def ls_remote(url, ref):
-              try:
-                  out = subprocess.run(
-                      ["git", "ls-remote", url, ref],
-                      capture_output=True, text=True, timeout=60, check=True,
-                  ).stdout.strip()
-                  return out.split()[0] if out else "unknown"
-              except Exception as e:
-                  print(f"::warning::ls-remote gagal untuk {url} {ref}: {e}")
-                  return "unknown"
-
-          def local_head(path):
-              try:
-                  out = subprocess.run(
-                      ["git", "-C", path, "rev-parse", "HEAD"],
-                      capture_output=True, text=True, timeout=30, check=True,
-                  ).stdout.strip()
-                  return out if out else "unknown"
-              except Exception as e:
-                  print(f"::warning::rev-parse gagal untuk {path}: {e}")
-                  return "unknown"
-
-          config = os.environ.get("CONFIG", "android_kernel_google_gs201")
-          # susfs4ksu & kernel tree sudah ada di disk (di-pin / di-clone di step sebelumnya),
-          # jadi pakai HEAD lokal. KernelSU-Next baru di-clone setelah step ini, jadi
-          # masih memakai ls-remote (nilai yang akan di-clone).
-          shas = {
-              "kernel_tree_sidharthify_6.12": local_head(config),
-              "KernelSU-Next_pershoot": ls_remote("https://github.com/pershoot/KernelSU-Next.git", "refs/heads/dev-susfs"),
-              "susfs4ksu_simonpunk_6.12": local_head("susfs4ksu"),
-              "nomount_dev": ls_remote("https://github.com/maxsteeel/nomount.git", "refs/heads/dev"),
-          }
-          with open("upstream-shas.json", "w") as f:
-              json.dump(shas, f, indent=2)
-          for k, v in shas.items():
-              print(f"[+] {k} = {v}")
-          EOF
-          cp upstream-shas.json "$GITHUB_WORKSPACE/upstream-shas-${{ matrix.variant }}-6.12-clang.json"
-          {
-            echo "### Upstream SHAs (6.12 Sidharthify)"
-            echo ""
-            python3 -c "import json; [print('- ' + k + ': ' + v) for k, v in json.load(open('upstream-shas.json')).items()]"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload Upstream SHAs
-        uses: actions/upload-artifact@v4
-        with:
-          name: upstream-shas-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
-          path: |
-            ${{ github.workspace }}/upstream-shas-${{ matrix.variant }}-6.12-clang.json
 
       - name: Add Root Implementation & Version Anchoring
         if: ${{ matrix.variant == 'KernelSU-Next' }}
@@ -351,7 +352,24 @@ jobs:
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             echo "[+] Adding KernelSU-Next dari fork pershoot (branch dev-susfs)..."
-            retry git clone --depth=1 https://github.com/pershoot/KernelSU-Next.git -b dev-susfs KernelSU-Next
+            # Pin ke KSUN_COMMIT (env job): patch 02_ksun & kontrak SUSFS divalidasi ke SHA ini.
+            # Kbuild KernelSU-Next menghitung KSU_VERSION = 30000 + jumlah commit, memakai NAMA branch
+            # (dev-susfs -> dev) dan menjalankan `git fetch --unshallow` saat make bila repo shallow.
+            # Pin dengan HEAD terlepas + --depth=1 menghasilkan 33554, bukan 33568 seperti clone
+            # -b dev-susfs (Kbuild menarik semua branch lalu merge-base ke origin/dev). Maka:
+            # lacak hanya dev-susfs (-t), ambil riwayat PENUH + tag di sini, checkout sebagai branch
+            # dev-susfs -> versi identik dengan clone lama, dan make tidak butuh jaringan.
+            rm -rf KernelSU-Next
+            git init -q KernelSU-Next
+            git -C KernelSU-Next remote add -t dev-susfs origin https://github.com/pershoot/KernelSU-Next.git
+            retry git -C KernelSU-Next fetch -q --tags origin "$KSUN_COMMIT"
+            git -C KernelSU-Next checkout -q -B dev-susfs FETCH_HEAD
+            [ "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSUN_COMMIT" ] || {
+              echo "::error::KernelSU-Next tidak berada di $KSUN_COMMIT."
+              exit 1
+            }
+            [ ! -f KernelSU-Next/.git/shallow ] || { echo "::error::KernelSU-Next masih shallow — KSU_VERSION akan salah."; exit 1; }
+            echo "[+] KernelSU-Next $(git -C KernelSU-Next describe --tags --abbrev=0 2>/dev/null || echo '?') @ ${KSUN_COMMIT:0:12} -> KSU_VERSION=$((30000 + $(git -C KernelSU-Next rev-list --count HEAD)))"
             ln -sf ../KernelSU-Next/kernel drivers/kernelsu
             # Fix Linux 6.12 header cleanup: sertakan <linux/pid.h> untuk task_pid_nr
             sed -i '1i#include <linux/pid.h>' KernelSU-Next/kernel/compat/samsung_kdp.c 2>/dev/null || true
@@ -448,6 +466,8 @@ jobs:
           cp "$SUSFS_DIR/include/linux/"* ./include/linux/
 
           SIDHARTHIFY_PATCH="$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android16-6.12-sidharthify.patch"
+          APPLIED_PATCH="$SIDHARTHIFY_PATCH"
+          [ -f "$APPLIED_PATCH" ] || APPLIED_PATCH="$SUSFS_DIR/50_add_susfs_in_gki-android16-6.12.patch"
           if [ -f "$SIDHARTHIFY_PATCH" ]; then
             echo "[+] Menerapkan patch SuSFS adaptasi Sidharthify 6.12..."
             patch -p1 < "$SIDHARTHIFY_PATCH" || {
@@ -470,12 +490,38 @@ jobs:
             exit 1
           fi
 
-          echo "=== Verifikasi konsistensi patch SUSFS/KSU ==="
-          if ! grep -rq "susfs_init" "$KSUN_DIR/kernel/" 2>/dev/null; then
-            echo "::error::susfs_init tidak ditemukan di $KSUN_DIR/kernel/ — wiring SUSFS hilang."
+          echo "=== Verifikasi kontrak SUSFS <-> KernelSU-Next ==="
+          # Gerbang lama (grep susfs_init di KernelSU-Next/kernel) SELALU lolos: core/init.c
+          # memanggilnya dan susfs/susfs_main.c (varian LKM) mendefinisikannya -- tanpa bukti
+          # bahwa sisi kernel (fs/susfs.c) menyediakan API yang dipanggil KernelSU-Next.
+          # Gerbang ini: setiap susfs_*() yang dipanggil supercall/dispatch.c WAJIB terdefinisi
+          # di fs/susfs.c. (Terbukti menolak lib v2.3.0 yang tidak punya *_uid_filter.)
+          for f in fs/susfs.c include/linux/susfs.h "$KSUN_DIR/kernel/supercall/dispatch.c"; do
+            [ -f "$f" ] || { echo "::error::$f tidak ditemukan — wiring SUSFS hilang."; exit 1; }
+          done
+          grep -qE '^void susfs_init\(' fs/susfs.c || {
+            echo "::error::susfs_init() tidak didefinisikan di fs/susfs.c."
             exit 1
-          fi
-          echo "[+] Konsistensi patch SUSFS/KSU OK (pershoot dev-susfs native)."
+          }
+          SUSFS_FNS="$(grep -ohE '\bsusfs_[a-z0-9_]+\(arg\)' "$KSUN_DIR/kernel/supercall/dispatch.c" | sed 's/(arg)$//' | sort -u)"
+          [ -n "$SUSFS_FNS" ] || {
+            echo "::error::Tidak ada panggilan susfs_*() terdeteksi di dispatch.c (format berubah?) — gerbang tak bisa memverifikasi."
+            exit 1
+          }
+          GATE_FAIL=0
+          for fn in $SUSFS_FNS; do
+            if ! grep -qE "^[a-z_ ]+[ *]${fn}\(" fs/susfs.c; then
+              echo "::error::KernelSU-Next memanggil ${fn}() tetapi fs/susfs.c tidak mendefinisikannya (versi SUSFS tidak cocok?)."
+              GATE_FAIL=1
+            fi
+          done
+          [ "$GATE_FAIL" -eq 0 ] || exit 1
+          echo "[+] Kontrak OK: $(echo "$SUSFS_FNS" | wc -l) fungsi susfs_*() terpenuhi (SUSFS $(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h))."
+
+          # Gerbang link: setiap simbol yang dideklarasikan `extern` oleh patch SUSFS harus punya
+          # definisi (fs/susfs.c, file ter-patch, atau KernelSU-Next). Riwayat CI: dua run gagal di
+          # link akhir ('undefined symbol: susfs_open_redirect_spoof_*') setelah ~25 menit.
+          python3 "$GITHUB_WORKSPACE/scripts/check_susfs_externs.py" "$APPLIED_PATCH" "$KSUN_DIR/kernel"
 
       - name: Integrate NoMount
         shell: bash
@@ -483,8 +529,12 @@ jobs:
           set -euo pipefail
           cd "$CONFIG"
           KERNEL_DIR="$(pwd)"
-          curl -fsSL --retry 3 https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s dev
+          curl -fsSL --retry 3 "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_PIN}/kernel/setup.sh" | bash -s "$NOMOUNT_PIN"
           actual_commit="$(git -C "$KERNEL_DIR/NoMount" rev-parse HEAD)"
+          [ "$actual_commit" = "$NOMOUNT_PIN" ] || {
+            echo "::error::NoMount berada di $actual_commit, bukan pin $NOMOUNT_PIN."
+            exit 1
+          }
           # setup.sh membuat symlink fs/nomount -> NoMount/kernel/src.
           # Cek harus positif: symlink ADA = sukses. Versi lama memakai
           # `[ ! -L ... ] && exit 1` yang justru menggagalkan step saat setup BERHASIL.
@@ -501,18 +551,21 @@ jobs:
           echo "NOMOUNT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
 
       - name: Build and Package NoMount Metamodule
+        if: ${{ inputs.build_nomount && strategy.job-index == 0 }}
         shell: bash
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          COMMIT_HASH="${NOMOUNT_COMMIT:-$(git ls-remote https://github.com/maxsteeel/nomount.git refs/heads/dev | cut -f1)}"
+          COMMIT_HASH="$NOMOUNT_PIN"
           SRC_DIR="nomount_src"
           MOD_DIR="nomount_mod"
           ZIP_OUT="NoMount.zip"
 
           rm -rf "$SRC_DIR" "$MOD_DIR"
-          git clone --depth=1 https://github.com/maxsteeel/nomount.git -b dev "$SRC_DIR"
-          git -C "$SRC_DIR" checkout "$COMMIT_HASH" || true
+          git init -q "$SRC_DIR"
+          git -C "$SRC_DIR" remote add origin https://github.com/maxsteeel/nomount.git
+          git -C "$SRC_DIR" fetch -q --depth=1 origin "$COMMIT_HASH"
+          git -C "$SRC_DIR" checkout -q --detach FETCH_HEAD
 
           mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin"
           (
@@ -531,8 +584,14 @@ jobs:
 
       - name: Apply Kernel Defconfig Flags
         shell: bash
+        env:
+          DEBUG_PANIC: ${{ inputs.debug_panic }}
         run: |
           set -euo pipefail
+          # Panic-on-oops/hung/softlockup hanya untuk bring-up (input debug_panic). Di build daily-driver
+          # satu hung task 60 detik saja akan me-reboot ponsel. Eksplisit =n agar default defconfig tak bocor.
+          if [ "$DEBUG_PANIC" = "true" ]; then PANIC_VAL=y; else PANIC_VAL=n; fi
+          echo "[+] debug_panic=$DEBUG_PANIC -> panic-on-oops/hung/softlockup=$PANIC_VAL"
           cd "$CONFIG"
 
           DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
@@ -656,13 +715,13 @@ jobs:
             echo "CONFIG_PSTORE_PMSG=y"
             echo "CONFIG_PSTORE_DEFLATE_COMPRESS=y"
             echo "CONFIG_LOG_BUF_SHIFT=21"
-            echo "CONFIG_PANIC_ON_OOPS=y"
+            echo "CONFIG_PANIC_ON_OOPS=$PANIC_VAL"
             echo "CONFIG_PANIC_TIMEOUT=10"
             echo "CONFIG_DETECT_HUNG_TASK=y"
             echo "CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=60"
-            echo "CONFIG_BOOTPARAM_HUNG_TASK_PANIC=y"
+            echo "CONFIG_BOOTPARAM_HUNG_TASK_PANIC=$PANIC_VAL"
             echo "CONFIG_DETECT_SOFTLOCKUP=y"
-            echo "CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC=y"
+            echo "CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC=$PANIC_VAL"
             echo "CONFIG_MAGIC_SYSRQ=y"
             echo "CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1"
             echo "CONFIG_STACKTRACE=y"
@@ -720,6 +779,21 @@ jobs:
           sed -i "s/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"-android16-6-syd-${{ matrix.variant }}\"/" "$DEFCONFIG"
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' "$DEFCONFIG" 2>/dev/null || true
 
+      - name: Wait for disk cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          pid="$(cat /tmp/disk-cleanup.pid 2>/dev/null || true)"
+          if [ -n "$pid" ]; then
+            SECONDS=0
+            while [ -d "/proc/$pid" ]; do sleep 2; done
+            echo "[+] Disk cleanup selesai (menunggu ${SECONDS}s di sini)."
+          fi
+          tail -3 /tmp/disk-cleanup.log 2>/dev/null || true
+          df -h / | tail -1
+          avail_gb=$(( $(df --output=avail -k / | tail -1) / 1024 / 1024 ))
+          [ "$avail_gb" -ge 15 ] || echo "::warning::Ruang disk tersisa hanya ${avail_gb}G sebelum build."
+
       - name: Build the Kernel
         shell: bash
         run: |
@@ -744,6 +818,7 @@ jobs:
           printf '#!/bin/sh\nexec ccache "%s" -Qunused-arguments "$@"\n' "$GITHUB_WORKSPACE/clang/bin/clang++" > "$HOME/.ccache-bin/clang++"
           chmod +x "$HOME/.ccache-bin/clang" "$HOME/.ccache-bin/clang++"
           export PATH="$HOME/.ccache-bin:$PATH"
+          ccache -z >/dev/null 2>&1 || true  # reset statistik agar `ccache -s` akhir = run ini saja
           export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
           if [ -d "KernelSU-Next" ]; then
             export KCFLAGS="$KCFLAGS -I$PWD/drivers/kernelsu -I$PWD/drivers/kernelsu/include -I$PWD/KernelSU-Next -I$PWD/KernelSU-Next/kernel -I$PWD/KernelSU-Next/kernel/include"
@@ -899,26 +974,35 @@ jobs:
             grep -iE "ksu|rust|bindgen|ashmem" /tmp/olddefconfig.log | tail -50 || true
             exit 1
           fi
-          # Install sanitised UAPI headers to $(objtree)/usr/include.
-          # KernelSU mengaktifkan preinit runner hanya bila
-          #   $(objtree)/usr/include/linux/unistd.h ada (kernel/Kbuild:127).
-          # Tanpa header ini preinit di-skip diam-diam, jadi kegagalan harus terlihat.
-          make "${MAKE_ARGS[@]}" headers_install || {
-            echo "::error::make headers_install gagal — preinit runner KernelSU tidak akan dibangun."
-            exit 1
-          }
-          if [ ! -f out/usr/include/linux/unistd.h ] && [ ! -f usr/include/linux/unistd.h ]; then
-            echo "::error::usr/include/linux/unistd.h tidak ditemukan setelah headers_install."
-            exit 1
+          # Install sanitised UAPI headers ke $(objtree)/usr/include -- hanya varian KSU.
+          # Kbuild KernelSU mengaktifkan preinit HANYA bila $(objtree)/usr/include/linux/unistd.h
+          # ada (kernel/Kbuild). Bila tidak, -DKSU_NO_PREINIT hanya berlaku untuk unit KernelSU,
+          # sedangkan fs/exec.c (patch SUSFS) tetap mereferensikan ksu_setup_preinit_file() ->
+          # "undefined reference" saat link, SETELAH 20+ menit kompilasi. Gagalkan di sini.
+          # objtree = direktori config aktif (out/ untuk tree ini), bukan root source.
+          if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
+            make "${MAKE_ARGS[@]}" headers_install || {
+              echo "::error::make headers_install gagal — preinit runner KernelSU tidak akan dibangun dan link akan gagal."
+              exit 1
+            }
+            OBJTREE="$(dirname "$CONFIG_FILE")"
+            if [ ! -f "$OBJTREE/usr/include/linux/unistd.h" ]; then
+              echo "::error::$OBJTREE/usr/include/linux/unistd.h tidak ada setelah headers_install — preinit KernelSU nonaktif; link akan gagal (undefined reference ksu_setup_preinit_file)."
+              exit 1
+            fi
+            echo "[+] UAPI headers siap ($OBJTREE/usr/include) untuk preinit runner KernelSU."
           fi
-          echo "[+] UAPI headers siap untuk preinit runner KernelSU."
 
           # 3. Kompilasi Paralel
-          make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j"$(nproc --all)" Image.lz4 dtbs || {
-            echo "::error::Build paralel gagal. Melacak via single-thread:"
-            make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j1 Image.lz4 dtbs
+          # Log build disimpan; saat gagal, error pertama diangkat jadi anotasi ::error:: (terlihat di
+          # halaman run) -- menggantikan re-run `make -j1` yang membangun ulang sisa target satu-thread.
+          if ! make "${MAKE_ARGS[@]}" LOCALVERSION_AUTO=0 -j"$(nproc --all)" Image.lz4 dtbs 2>&1 | tee /tmp/build.log; then
+            echo "========== Ringkasan error build =========="
+            grep -nE 'error:|undefined (reference|symbol)|No rule to make target|\*\*\* \[' /tmp/build.log | head -40 || true
+            grep -E 'error:|undefined (reference|symbol)|No rule to make target' /tmp/build.log \
+              | grep -v '^make' | awk '!seen[$0]++' | head -10 | while IFS= read -r l; do echo "::error::$l"; done || true
             exit 1
-          }
+          fi
 
           ccache -s || true
 
@@ -993,12 +1077,12 @@ jobs:
           ### 🚀 Build Summary: ${{ inputs.codename }} 6.12 (${{ matrix.variant }}) [Clang]
           | Komponen | Status / Nilai |
           |---|---|
-          | **Kernel Version** | `Linux 6.12 (Sidharthify)` |
-          | **Compiler** | `Neutron Clang 06092026` |
-          | **LTO** | `LTO_NONE (Rust/ashmem aktif)` |
-          | **Variant** | `${{ matrix.variant }}` |
-          | **Job Status** | `${{ job.status }}` |
-          | **Artifact Name** | `${ZIP_NAME}` |
+          | **Kernel Version** | \`Linux 6.12 (Sidharthify)\` |
+          | **Compiler** | \`Neutron Clang 06092026\` |
+          | **LTO** | \`LTO_NONE (Rust/ashmem aktif)\` |
+          | **Variant** | \`${{ matrix.variant }}\` |
+          | **Job Status** | \`${{ job.status }}\` |
+          | **Artifact Name** | \`${ZIP_NAME}\` |
           | **SHA-256** | \`${ZIP_SHA}\` |
           EOF
 
@@ -1050,6 +1134,54 @@ jobs:
               print(f"[!] Warning: Failed to query {repo}: {e}")
           EOF
 
+      - name: Record Upstream SHAs
+        # Di akhir + always(): mencatat SHA yang BENAR-BENAR dibangun (bukan tip remote saat
+        # step awal), termasuk saat build gagal -- itu justru saat manifest paling berguna.
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          python3 - << 'EOF'
+          import json, os, subprocess
+
+          def local_head(path):
+              if not os.path.isdir(path):
+                  return "n/a"
+              try:
+                  return subprocess.run(
+                      ["git", "-C", path, "rev-parse", "HEAD"],
+                      capture_output=True, text=True, timeout=30, check=True,
+                  ).stdout.strip() or "unknown"
+              except Exception as e:
+                  print(f"::warning::rev-parse gagal untuk {path}: {e}")
+                  return "unknown"
+
+          cfg = os.environ["CONFIG"]
+          shas = {
+              "kernel_tree_sidharthify_6.12": local_head(cfg),
+              "KernelSU-Next_pershoot": local_head(cfg + "/KernelSU-Next"),
+              "susfs4ksu_simonpunk_6.12": local_head("susfs4ksu"),
+              "nomount_dev": local_head(cfg + "/NoMount"),
+          }
+          with open("upstream-shas.json", "w") as f:
+              json.dump(shas, f, indent=2)
+          for k, v in shas.items():
+              print(f"[+] {k} = {v}")
+          EOF
+          cp upstream-shas.json "$GITHUB_WORKSPACE/upstream-shas-${{ matrix.variant }}-6.12-clang.json"
+          {
+            echo "### Upstream SHAs (6.12 Sidharthify)"
+            echo ""
+            python3 -c "import json; [print('- ' + k + ': ' + v) for k, v in json.load(open('upstream-shas.json')).items()]"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Upstream SHAs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-shas-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
+          path: |
+            ${{ github.workspace }}/upstream-shas-${{ matrix.variant }}-6.12-clang.json
+
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -1062,14 +1194,15 @@ jobs:
             !${{ github.workspace }}/NoMount*.sha256
 
       - name: Upload NoMount Metamodule Artifact
+        if: ${{ inputs.build_nomount && strategy.job-index == 0 }}
         uses: actions/upload-artifact@v4
         with:
-          # Nama wajib unik per matrix.variant: job matrix berjalan paralel dan
-          # upload-artifact v4 menolak/ menimpa artefak dengan nama sama.
-          name: NoMount-Metamodule-${{ inputs.codename }}-${{ matrix.variant }}-6.12-clang
+          # Satu artefak per run (lihat gate di atas) -> nama tetap, tanpa varian.
+          name: NoMount-Metamodule
           path: |
-            ${{ github.workspace }}/NoMount*.zip
-            ${{ github.workspace }}/NoMount*.sha256
+            ${{ github.workspace }}/NoMount.zip
+            ${{ github.workspace }}/NoMount.zip.sha256
+          if-no-files-found: error
 
       - name: Upload Manager APK Artifact
         if: ${{ matrix.variant == 'KernelSU-Next' }}
