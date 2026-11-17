@@ -36,6 +36,11 @@ on:
         required: false
         default: true
         type: boolean
+      rust_binder:
+        description: "6.12: Rust Binder built-in (CONFIG_ANDROID_BINDER_IPC_RUST=y); dipakai hanya dengan binder.impl=rust di cmdline."
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build-kernel-gs201-612-clang:
@@ -46,6 +51,7 @@ jobs:
       codename: "gs201"
       variants: ${{ inputs.variants }}
       debug_panic: ${{ inputs.debug_panic }}
+      rust_binder: ${{ inputs.rust_binder }}
       # NoMount metamodule dibangun SEKALI per run: oleh 6.12 bila ikut dibangun, selain itu oleh 6.1.
       build_nomount: true
 

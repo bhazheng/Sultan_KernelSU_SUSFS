@@ -29,6 +29,11 @@ on:
         required: false
         type: boolean
         default: true
+      rust_binder:
+        description: "Bangun Rust Binder built-in (CONFIG_ANDROID_BINDER_IPC_RUST=y). Aktif hanya dengan binder.impl=rust di cmdline; tanpa itu C binder tetap dipakai."
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       codename:
@@ -44,6 +49,11 @@ on:
         required: false
         type: boolean
         default: true
+      rust_binder:
+        description: "Bangun Rust Binder built-in (CONFIG_ANDROID_BINDER_IPC_RUST=y). Aktif hanya dengan binder.impl=rust di cmdline; tanpa itu C binder tetap dipakai."
+        required: false
+        type: boolean
+        default: false
       build_nomount:
         description: "Build & upload NoMount metamodule (sekali, di job matrix pertama)"
         required: false
@@ -620,6 +630,7 @@ jobs:
         shell: bash
         env:
           DEBUG_PANIC: ${{ inputs.debug_panic }}
+          RUST_BINDER: ${{ inputs.rust_binder }}
         run: |
           set -euo pipefail
           # Panic-on-oops/hung/softlockup hanya untuk bring-up (input debug_panic). Di build daily-driver
@@ -800,6 +811,15 @@ jobs:
             echo "CONFIG_DM_VERITY=y"
           } >> "$DEFCONFIG"
 
+          # Rust Binder built-in: rust_binder.ko di system_dlkm/vendor_dlkm YAAP hanya bisa di-link ke
+          # kernel stok YAAP (hash crate Rust berbeda per build), dan modul yang dimuat setelah binderfs
+          # di-mount jatuh kembali ke C binder. Built-in (=y) mengambil alih binderfs saat initcall bila
+          # cmdline berisi binder.impl=rust; tanpa parameter itu C binder (tetap =y) yang dipakai.
+          if [ "$RUST_BINDER" = "true" ]; then
+            echo "[+] rust_binder=true -> CONFIG_ANDROID_BINDER_IPC_RUST=y"
+            echo "CONFIG_ANDROID_BINDER_IPC_RUST=y" >> "$DEFCONFIG"
+          fi
+
 
           if [ "${{ matrix.variant }}" == "KernelSU-Next" ]; then
             {
@@ -830,6 +850,8 @@ jobs:
 
       - name: Build the Kernel
         shell: bash
+        env:
+          RUST_BINDER: ${{ inputs.rust_binder }}
         run: |
           set -euo pipefail
           cd "$CONFIG"
@@ -997,6 +1019,17 @@ jobs:
           if ! grep -q "^CONFIG_GENDWARFKSYMS=y" "$CONFIG_FILE"; then
             echo "::error::CONFIG_GENDWARFKSYMS tidak aktif (butuh !LTO) — Rust+MODVERSIONS akan gagal."
             MISSING=1
+          fi
+          if [ "$RUST_BINDER" = "true" ]; then
+            if ! grep -q "^CONFIG_ANDROID_BINDER_IPC_RUST=y" "$CONFIG_FILE"; then
+              echo "::error::rust_binder=true tetapi CONFIG_ANDROID_BINDER_IPC_RUST bukan =y (butuh RUST && MMU && NET)."
+              MISSING=1
+            fi
+            # C binder harus tetap ada: dialah yang dipakai bila binder.impl=rust tidak di-set.
+            if ! grep -q "^CONFIG_ANDROID_BINDER_IPC=y" "$CONFIG_FILE"; then
+              echo "::error::CONFIG_ANDROID_BINDER_IPC hilang; C binder wajib tetap built-in."
+              MISSING=1
+            fi
           fi
 
           if ! grep -q "^CONFIG_KALLSYMS_ALL=y" "$CONFIG_FILE"; then
