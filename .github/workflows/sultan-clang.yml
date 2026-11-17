@@ -54,6 +54,9 @@ jobs:
       # NoMount (maxsteeel/nomount): dulu mengikuti tip branch dev + menjalankan setup.sh mentah
       # dari dev -> kode tak ter-review langsung masuk kernel. Kini setup.sh dan source di-pin.
       NOMOUNT_PIN: "f83db94afa3e480584ee57045fc7f5efdde83040"
+      # lkmloader (maxsteeel/lkmloader): customize.sh NoMount memindahkan bin/lkmloader-$ARCH ke
+      # lkm/lkmloader; tanpanya instalasi modul mencetak error mv/set_perm.
+      LKMLOADER_PIN: "03fa70ea33f90fa21729d4dd26da7920ee370b71"
     strategy:
       fail-fast: false
       matrix:
@@ -160,7 +163,9 @@ jobs:
         if: ${{ inputs.build_nomount && strategy.job-index == 0 }}
         uses: jetsung/setup-zig@ece60a5f01428e90311476245667dc49e3f84513 # v0.0.4
         with:
-          version: 0.13.0
+          # Upstream NoMount membangun dengan Zig master; 0.13.0 gagal untuk flag mereka
+          # (-mcmodel=tiny + musl static: 'unknown relocation'; arm-linux tanpa musl default).
+          version: 0.17.1
 
       - name: Set CONFIG Environment Variable
         shell: bash
@@ -433,20 +438,49 @@ jobs:
           git -C "$SRC_DIR" fetch -q --depth=1 origin "$COMMIT_HASH"
           git -C "$SRC_DIR" checkout -q --detach FETCH_HEAD
 
-          mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin"
+          LKML_DIR="lkmloader_src"
+          rm -rf "$LKML_DIR"
+          git init -q "$LKML_DIR"
+          git -C "$LKML_DIR" remote add origin https://github.com/maxsteeel/lkmloader.git
+          git -C "$LKML_DIR" fetch -q --depth=1 origin "$LKMLOADER_PIN"
+          git -C "$LKML_DIR" checkout -q --detach FETCH_HEAD
+
+          # Flag = .github/workflows/build.yml upstream pada pin ini. nm.c kini memakai header libc
+          # (unistd.h, dirent.h, ...) -> link statis ke musl bawaan Zig; -nostdlib/_start lama
+          # gagal dengan "'unistd.h' file not found".
+          mkdir -p "$SRC_DIR/bin" "$MOD_DIR/bin" "$MOD_DIR/lkm"
           (
             cd "$SRC_DIR/userspace/src"
-            zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -Wl,--entry=_start nm.c -o ../../bin/nm-arm64
-            zig cc -target arm-linux -Oz -static -nostdlib -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--entry=_start nm.c -o ../../bin/nm-arm
+            zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
+              -mllvm -enable-machine-outliner=always nm.c -o ../../bin/nm-arm64
+            zig cc -target arm-linux -Oz -static -ffreestanding -fno-unwind-tables -fno-ident -Wno-invalid-noreturn \
+              -ffunction-sections -fdata-sections -Wl,--gc-sections nm.c -o ../../bin/nm-arm
+          )
+          (
+            cd "$LKML_DIR"
+            zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -Wl,--gc-sections,-z,norelro -fno-unwind-tables \
+              -fno-ident -flto -fmerge-all-constants -fomit-frame-pointer -mllvm -enable-machine-outliner=always \
+              src/lkmloader.c -o "../$SRC_DIR/bin/lkmloader-arm64"
+            zig cc -target arm-linux -Oz -static -Wl,--gc-sections,-z,norelro -fno-unwind-tables \
+              -fno-ident -flto -fmerge-all-constants -fomit-frame-pointer src/lkmloader.c -o "../$SRC_DIR/bin/lkmloader-arm"
           )
           cp -a "$SRC_DIR/module/." "$MOD_DIR/"
-          install -m 0755 "$SRC_DIR/bin/nm-arm64" "$MOD_DIR/bin/nm-arm64"
-          install -m 0755 "$SRC_DIR/bin/nm-arm" "$MOD_DIR/bin/nm-arm"
+          for b in nm-arm64 nm-arm lkmloader-arm64 lkmloader-arm; do
+            install -m 0755 "$SRC_DIR/bin/$b" "$MOD_DIR/bin/$b"
+          done
+          # Biner harus ELF ARM statis (tanpa interpreter): perangkat tidak punya musl.
+          file "$MOD_DIR"/bin/*
+          for b in "$MOD_DIR"/bin/*; do
+            file -b "$b" | grep -q 'statically linked' || { echo "::error::$(basename "$b") bukan biner statis."; exit 1; }
+          done
+          case "$(file -b "$MOD_DIR/bin/nm-arm64")" in *aarch64*) ;; *) echo "::error::nm-arm64 bukan aarch64."; exit 1 ;; esac
+          printf '%s\n' "$LKMLOADER_PIN" > "$MOD_DIR/LKMLOADER_SOURCE_COMMIT"
           sed -i "s/^versionCode=.*/versionCode=1/" "$MOD_DIR/module.prop"
           printf '%s\n' "$COMMIT_HASH" > "$MOD_DIR/NOMOUNT_SOURCE_COMMIT"
           (cd "$MOD_DIR" && zip -qr9 "../$ZIP_OUT" .)
           sha256sum "$ZIP_OUT" > "${ZIP_OUT}.sha256"
-          rm -rf "$SRC_DIR" "$MOD_DIR"
+          unzip -l "$ZIP_OUT"
+          rm -rf "$SRC_DIR" "$MOD_DIR" "$LKML_DIR"
 
       - name: Apply Kernel Defconfig Flags
         shell: bash
