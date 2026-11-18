@@ -643,11 +643,17 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi KSU/SUSFS dilewati (tanpa KSU)."
           fi
 
-          # Nama kernel (uname -r) gaya GKI stock: <versi>-android14-11 (BRANCH + KMI_GENERATION di
-          # build.config.constants), sama untuk semua varian. LOCALVERSION= (kosong) di MAKE_ARGS
-          # mencegah setlocalversion menambahkan "+" karena tree tidak tepat di tag rilis.
-          sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-android14-11"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          grep -qx 'CONFIG_LOCALVERSION="-android14-11"' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || { echo "::error::CONFIG_LOCALVERSION tidak ter-set ke -android14-11."; exit 1; }
+          # Nama kernel (uname -r) gaya GKI stock: <versi>-android14-11-g<12 hex HEAD upstream>, tanpa -dirty.
+          # Hash ditulis langsung ke CONFIG_LOCALVERSION (LOCALVERSION_AUTO tetap mati): AUTO selalu
+          # menambahkan -dirty karena CI menambal tree. HEAD = commit upstream (clone, tanpa commit CI).
+          # LOCALVERSION= (kosong) di MAKE_ARGS mencegah setlocalversion menambahkan "+".
+          KHASH="$(git rev-parse HEAD | cut -c1-12)"
+          [[ "$KHASH" =~ ^[0-9a-f]{12}$ ]] || { echo "::error::Hash HEAD kernel tidak valid: '$KHASH'."; exit 1; }
+          KLV="-android14-11-g$KHASH"
+          sed -i "s/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"$KLV\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          grep -qx "CONFIG_LOCALVERSION=\"$KLV\"" ./arch/arm64/configs/${{ inputs.codename }}_defconfig || { echo "::error::CONFIG_LOCALVERSION tidak ter-set ke $KLV."; exit 1; }
+          echo "KERNEL_LOCALVERSION=$KLV" >> "$GITHUB_ENV"
+          echo "[+] CONFIG_LOCALVERSION=$KLV"
           echo "[+] Menerapkan patch perbaikan kernel Sultan..."
           patch -p1 < "$GITHUB_WORKSPACE/patches/00_sultan_kernel_fixes.patch"
 
@@ -845,7 +851,8 @@ jobs:
           cd "$CONFIG"
           KREL="$(cat out/include/config/kernel.release 2>/dev/null || cat include/config/kernel.release)"
           echo "[+] Kernel release: $KREL"
-          case "$KREL" in *-android14-11) ;; *) echo "::error::Kernel release '$KREL' tidak berakhiran -android14-11."; exit 1 ;; esac
+          case "$KREL" in *"$KERNEL_LOCALVERSION") ;; *) echo "::error::Kernel release '$KREL' tidak berakhiran $KERNEL_LOCALVERSION."; exit 1 ;; esac
+          case "$KREL" in *dirty*|*+) echo "::error::Kernel release '$KREL' memuat -dirty/+."; exit 1 ;; esac
           if [ -f ./out/arch/arm64/boot/Image.lz4 ]; then
             cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           elif [ -f ./out/arch/arm64/boot/Image ]; then
