@@ -821,7 +821,11 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi KSU/SUSFS dilewati (tanpa KSU)."
           fi
 
-          # Nama kernel (uname -r) = bawaan tree: CONFIG_LOCALVERSION dari defconfig dibiarkan apa adanya.
+          # Nama kernel (uname -r) gaya GKI stock: <versi>-android16-6 (BRANCH + KMI_GENERATION di
+          # build.config.constants), sama untuk semua varian. LOCALVERSION= (kosong) di MAKE_ARGS
+          # mencegah setlocalversion menambahkan "+" karena tree tidak tepat di tag rilis.
+          sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-android16-6"/' "$DEFCONFIG"
+          grep -qx 'CONFIG_LOCALVERSION="-android16-6"' "$DEFCONFIG" || { echo "::error::CONFIG_LOCALVERSION tidak ter-set ke -android16-6."; exit 1; }
 
       - name: Wait for disk cleanup
         shell: bash
@@ -885,6 +889,7 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             WERROR=0
+            LOCALVERSION=
             RUSTC="${RUSTC_PATH}"
             HOSTRUSTC="${RUSTC_PATH}"
             BINDGEN="${BINDGEN_PATH}"
@@ -1094,6 +1099,9 @@ jobs:
         run: |
           set -euo pipefail
           cd "$CONFIG"
+          KREL="$(cat out/include/config/kernel.release 2>/dev/null || cat include/config/kernel.release)"
+          echo "[+] Kernel release: $KREL"
+          case "$KREL" in *-android16-6) ;; *) echo "::error::Kernel release '$KREL' tidak berakhiran -android16-6."; exit 1 ;; esac
           if [ -f ./out/arch/arm64/boot/Image.lz4 ]; then
             cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           elif [ -f ./out/arch/arm64/boot/Image ]; then

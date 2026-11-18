@@ -643,7 +643,11 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi KSU/SUSFS dilewati (tanpa KSU)."
           fi
 
-          # Nama kernel (uname -r) = bawaan tree: CONFIG_LOCALVERSION dari defconfig dibiarkan apa adanya.
+          # Nama kernel (uname -r) gaya GKI stock: <versi>-android14-11 (BRANCH + KMI_GENERATION di
+          # build.config.constants), sama untuk semua varian. LOCALVERSION= (kosong) di MAKE_ARGS
+          # mencegah setlocalversion menambahkan "+" karena tree tidak tepat di tag rilis.
+          sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-android14-11"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          grep -qx 'CONFIG_LOCALVERSION="-android14-11"' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || { echo "::error::CONFIG_LOCALVERSION tidak ter-set ke -android14-11."; exit 1; }
           echo "[+] Menerapkan patch perbaikan kernel Sultan..."
           patch -p1 < "$GITHUB_WORKSPACE/patches/00_sultan_kernel_fixes.patch"
 
@@ -692,7 +696,7 @@ jobs:
           export PATH="$HOME/.ccache-bin:$PATH"
           ccache -z >/dev/null 2>&1 || true  # reset statistik agar `ccache -s` akhir = run ini saja
           export KCFLAGS="-Wno-c2x-extensions -Wno-error=c2x-extensions -Wno-c23-extensions -Wno-error=c23-extensions -Wno-unknown-warning-option"
-          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0"
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- WERROR=0 LOCALVERSION="
 
           # Bersihkan file .config di root source tree agar out-of-tree build Sultan (out/) tidak melempar error mrproper
           rm -f .config
@@ -839,6 +843,9 @@ jobs:
         run: |
           set -euo pipefail
           cd "$CONFIG"
+          KREL="$(cat out/include/config/kernel.release 2>/dev/null || cat include/config/kernel.release)"
+          echo "[+] Kernel release: $KREL"
+          case "$KREL" in *-android14-11) ;; *) echo "::error::Kernel release '$KREL' tidak berakhiran -android14-11."; exit 1 ;; esac
           if [ -f ./out/arch/arm64/boot/Image.lz4 ]; then
             cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           elif [ -f ./out/arch/arm64/boot/Image ]; then
