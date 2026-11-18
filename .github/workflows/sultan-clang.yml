@@ -643,8 +643,7 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi KSU/SUSFS dilewati (tanpa KSU)."
           fi
 
-          sed -i "s/CONFIG_LOCALVERSION=\"-Sultan\"/CONFIG_LOCALVERSION=\"-Sultan-${{ matrix.variant }}\"/" ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          sed -i 's/CONFIG_LOCALVERSION_AUTO=y/CONFIG_LOCALVERSION_AUTO=n/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig || true
+          # Nama kernel (uname -r) = bawaan tree: CONFIG_LOCALVERSION dari defconfig dibiarkan apa adanya.
           echo "[+] Menerapkan patch perbaikan kernel Sultan..."
           patch -p1 < "$GITHUB_WORKSPACE/patches/00_sultan_kernel_fixes.patch"
 
