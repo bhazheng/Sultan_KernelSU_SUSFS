@@ -821,13 +821,15 @@ jobs:
             echo "[*] Varian ${{ matrix.variant }} — injeksi KSU/SUSFS dilewati (tanpa KSU)."
           fi
 
-          # Nama kernel (uname -r) gaya GKI stock: <versi>-android16-6-g<12 hex HEAD upstream>, tanpa -dirty.
+          # Nama kernel (uname -r) gaya GKI stock: <versi>-android16-6-g<12 hex HEAD upstream>-ab<nomor build>,
+          # tanpa -dirty. -ab<N> = GITHUB_RUN_NUMBER (stock memakai build ID ci.android.com).
           # Hash ditulis langsung ke CONFIG_LOCALVERSION (LOCALVERSION_AUTO tetap mati): AUTO selalu
           # menambahkan -dirty karena CI menambal tree. HEAD = commit upstream (clone, tanpa commit CI).
           # LOCALVERSION= (kosong) di MAKE_ARGS mencegah setlocalversion menambahkan "+".
           KHASH="$(git rev-parse HEAD | cut -c1-12)"
           [[ "$KHASH" =~ ^[0-9a-f]{12}$ ]] || { echo "::error::Hash HEAD kernel tidak valid: '$KHASH'."; exit 1; }
-          KLV="-android16-6-g$KHASH"
+          [[ "$GITHUB_RUN_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::GITHUB_RUN_NUMBER tidak valid."; exit 1; }
+          KLV="-android16-6-g$KHASH-ab$GITHUB_RUN_NUMBER"
           sed -i "s/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"$KLV\"/" "$DEFCONFIG"
           grep -qx "CONFIG_LOCALVERSION=\"$KLV\"" "$DEFCONFIG" || { echo "::error::CONFIG_LOCALVERSION tidak ter-set ke $KLV."; exit 1; }
           echo "KERNEL_LOCALVERSION=$KLV" >> "$GITHUB_ENV"
